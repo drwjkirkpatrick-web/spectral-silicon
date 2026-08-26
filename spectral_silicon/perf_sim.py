@@ -1652,16 +1652,12 @@ class PerfChipV3:
 
         return {
             "bitstream_encryption": True,      # LFSR cipher unaffected
-            "logic_locking": True,              # spectral mode key unaffected
             "constant_time_mac": ct_stats["is_constant_time"]
             and ct_stats["all_modes_processed"],
             "power_flattening_decoy": True,     # enhanced by zero-skip dummy cycles
-            "scan_chain_lockout": True,         # fuse-based, unaffected
-            "layout_obfuscation": True,         # filler cells, unaffected
             "integrity_hash": True,             # FNV-1a, covers all data
             "em_shielding": True,               # top metal shield covers both channels
             "reproducible_build": True,         # EDA pinning, unaffected
-            "split_manufacturing": True,        # FEOL/BEOL split, unaffected
             # DVFS-specific security checks
             "dvfs_secure_transition": dvfs_sec["all_verified"],
         }

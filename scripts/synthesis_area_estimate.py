@@ -605,10 +605,6 @@ def estimate_security_modules() -> Dict[str, Dict[str, Any]]:
             "description": "Trivium stream cipher for weight encryption",
             "total": 1500.0,
         },
-        "logic_lock": {
-            "description": "32-bit key-gated twiddle MUX",
-            "total": 800.0,
-        },
         "constant_time_mac": {
             "description": "Fixed-cycle MAC control",
             "total": 400.0,
@@ -616,14 +612,6 @@ def estimate_security_modules() -> Dict[str, Dict[str, Any]]:
         "power_flattening": {
             "description": "Decoy MAC + LFSR",
             "total": 2000.0,
-        },
-        "scan_lockout": {
-            "description": "Poly-fuse scan chain disconnect",
-            "total": 200.0,
-        },
-        "netlist_obfuscation": {
-            "description": "50 dummy filler cells",
-            "total": 300.0,
         },
         "integrity_hash": {
             "description": "SHA-256 hash of weight bitstream",
@@ -635,10 +623,6 @@ def estimate_security_modules() -> Dict[str, Dict[str, Any]]:
         },
         "reproducible_build": {
             "description": "Build manifest (software, no gates)",
-            "total": 0.0,
-        },
-        "split_manufacturing": {
-            "description": "Process-level, no RTL gates",
             "total": 0.0,
         },
     }

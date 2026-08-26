@@ -72,7 +72,7 @@ LLM token embeddings are real-valued, so the FFT input is real. A real-input FFT
 ### 12. Twiddle Factor Symmetry Exploitation
 Exploit the property W_N^(k+N/4) = -j * W_N^k to generate 4 twiddle factors from 1 stored value. For a 256-point FFT, this **reduces twiddle storage from 64 to 16 entries** (4× compression). The three derived factors are obtained by swapping real/imaginary parts and sign flipping — trivial in hardware (zero gate cost, just wiring).
 
-**Security preserved:** Twiddle generation is deterministic from the stored seed value. Logic locking still gates whether real or decoy twiddles are used. The derivation is fixed arithmetic, not data-dependent.
+**Security preserved:** Twiddle generation is deterministic from the stored seed value. The derivation is fixed arithmetic, not data-dependent.
 
 ### 13. Zero-Skipping Spectral Multiply with Dummy Cycle Injection
 When a spectral mode has been zeroed by soft-thresholding, the multiply result is zero. Instead of computing the full multiply, inject a dummy cycle that performs a decoy multiply on random data (reusing the power-flattening LFSR). The cycle count remains constant (security preserved), but the **real multiplier is idle for zeroed modes**, reducing switching activity by ~30% for typical 50% sparsity.

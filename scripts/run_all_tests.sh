@@ -174,8 +174,6 @@ else
         rtl/spectral_multiply.v
         rtl/modrelu.v
         rtl/weight_crypto.v
-        rtl/logic_lock.v
-        rtl/scan_lockout.v
         rtl/integrity_hash.v
         rtl/constant_time_mac.v
         rtl/power_flattening.v

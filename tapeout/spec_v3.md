@@ -84,18 +84,18 @@ All 10 security measures from IMPROVEMENTS.md (items 11–20) are preserved or e
 
 ### 2.1 Security Measures (from v2, preserved in v3)
 
+Note: Logic locking (12), scan chain lockout (15), layout obfuscation (16), and
+split manufacturing (20) were removed — this is an open-source open-design chip
+with no need for anti-reverse-engineering measures.
+
 | # | Security Measure | RTL Module | v3 Status |
-|---|-----------------|------------|-----------|
+|---|-----------------|------------|----------|
 | 11 | Bitstream Encryption | `weight_crypto.v` | Preserved — weights encrypted in transit, decrypted into shadow regs |
-| 12 | Logic Locking | `logic_lock.v` | Preserved — 32-bit key gates twiddle selection, unaffected by perf changes |
 | 13 | Constant-Time Spectral Multiply | `constant_time_mac.v` | Preserved — all k modes processed in fixed cycles, enhanced by zero-skip dummy |
 | 14 | Power Flattening (Decoy MAC) | `power_flattening.v` | Preserved — decoy MAC runs alongside real MAC, enhanced by zero-skip reuse |
-| 15 | Scan Chain Lockout | `scan_lockout.v` | Preserved — poly-fuse blow disconnects scan chain post-test |
-| 16 | Layout-Level Netlist Obfuscation | (OpenROAD filler cells) | Preserved — ~50 dummy filler cells, no functional impact |
 | 17 | Supply Chain Integrity Hash | `integrity_hash.v` | Preserved — SHA-256 of weight bitstream, recomputed at boot |
 | 18 | EM Shielding | `em_shield.v` | Preserved — Metal 6 ground shield over both dual-channel datapaths |
 | 19 | Reproducible Build Verification | `gen_manifest.py` | Preserved — tool versions pinned, manifest hash verified |
-| 20 | Split Manufacturing Mask Set | (process-level) | Preserved — FEOL/BEOL split, no RTL impact |
 
 ### 2.2 Per-Improvement Security Analysis
 
@@ -112,7 +112,7 @@ All 10 security measures from IMPROVEMENTS.md (items 11–20) are preserved or e
 | 9 | Conflict-Free Addressing | Fixed mathematical mapping, no data dependency. No timing side-channel. Same memory access count regardless of data. |
 | 10 | Bit-Reversal Router | Fixed permutation, not data-dependent. Doesn't change what data is processed, only order. No side-channel. |
 | 11 | RFFT | Mathematical optimization, same result. Integrity hash covers reduced mode set. Constant-time MAC processes all k modes. |
-| 12 | Twiddle Symmetry | Deterministic derivation from seed. Logic locking still gates real vs decoy twiddles. Fixed arithmetic, not data-dependent. |
+| 12 | Twiddle Symmetry | Deterministic derivation from seed. Fixed arithmetic, not data-dependent. |
 | 13 | Zero-Skip with Dummy | **Enhances security**: maintains constant timing AND reduces power. Dummy cycle draws same power as real multiply. Attacker cannot distinguish real-zero from dummy-random. |
 | 14 | Mode Interleaving | Scheduling optimization. All modes processed in constant time. Both stages draw equal power simultaneously. No side-channel. |
 | 15 | Adaptive Mode Count | k is a host configuration parameter, not data-derived. Constant-time for any fixed k. k is public on the bus. |
@@ -263,7 +263,7 @@ Tiny Tapeout provides 8 bidirectional I/O pins plus clock and reset. The v3 uses
 | Module Set | Test Command |
 |------------|-------------|
 | v1 modules (fft_256, ifft_256, spectral_mixer) | `iverilog -o /dev/null rtl/butterfly2.v rtl/butterfly4.v rtl/twiddle_rom.v rtl/fft_stage.v rtl/fft_256.v rtl/ifft_256.v rtl/spectral_multiply.v rtl/modrelu.v rtl/spectral_mixer.v rtl/wishbone_if.v` |
-| v2 modules (shared FFT, security) | `iverilog -o /dev/null rtl/butterfly2.v rtl/butterfly4.v rtl/twiddle_rom.v rtl/fft_stage.v rtl/fft_ifft_256.v rtl/spectral_multiply.v rtl/modrelu.v rtl/weight_crypto.v rtl/logic_lock.v rtl/scan_lockout.v rtl/integrity_hash.v rtl/constant_time_mac.v rtl/power_flattening.v rtl/em_shield.v rtl/wishbone_if.v rtl/spectral_mixer_v2.v` |
+| v2 modules (shared FFT, security) | `iverilog -o /dev/null rtl/butterfly2.v rtl/butterfly4.v rtl/twiddle_rom.v rtl/fft_stage.v rtl/fft_ifft_256.v rtl/spectral_multiply.v rtl/modrelu.v rtl/weight_crypto.v rtl/integrity_hash.v rtl/constant_time_mac.v rtl/power_flattening.v rtl/em_shield.v rtl/wishbone_if.v rtl/spectral_mixer_v2.v` |
 | v3 modules (20 performance modules) | See `scripts/run_all_tests.sh` for full compile list |
 
 ### 6.3 Benchmark Scripts

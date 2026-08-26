@@ -39,8 +39,8 @@ During idle periods, force all butterfly inputs to zero using AND gates controll
 ### 11. Bitstream Encryption for Weight Loading
 Encrypt the spectral weight bitstream loaded via the Wishbone bus using a lightweight stream cipher (Trivium or a 32-bit LFSR-based scheme). The decryption key is stored in on-chip fuses (SKY130 supports poly-fuse). Without the key, an attacker who probes the bus sees only ciphertext. **Prevents weight IP extraction** via bus snooping.
 
-### 12. Logic Locking with Spectral Mode Key
-Insert key-gated multiplexers in the FFT pipeline that select between the real twiddle factors and decoy values. Only when the correct 32-bit key is loaded do the multiplexers route the correct twiddles. An attacker who reverse-engineers the GDSII cannot extract functional weights without the key. **Protects against foundry-side IP theft** and overproduction.
+### 12. ~~Logic Locking with Spectral Mode Key~~ (REMOVED — open-source design)
+Removed: This is an open-source, open-design chip. Anti-reverse-engineering measures are not needed.
 
 ### 13. Constant-Time Spectral Multiply
 Make the spectral weight multiply take the same number of clock cycles regardless of how many modes are zeroed by soft-thresholding. Currently, zeroed modes could be skipped for efficiency, but this creates a timing side-channel that leaks which modes are active. Force all k modes to be processed (including zeroed ones) with a constant cycle count. **Prevents timing-based weight extraction**.
@@ -48,11 +48,11 @@ Make the spectral weight multiply take the same number of clock cycles regardles
 ### 14. Power Flattening via Decoy MAC
 Add a parallel decoy multiply-accumulate unit that operates simultaneously with the real spectral multiply. The decoy MAC computes on random data but draws the same power as the real MAC. An attacker measuring power traces cannot distinguish real computation from decoy. **Increases traces needed for CPA attack by ~100×** at the cost of ~2K extra gates.
 
-### 15. Scan Chain Lockout
-Disable the scan chain (used for manufacturing test) after production test via a poly-fuse blow. Before the fuse is blown, full scan access is available for test. After blowout, the scan chain is physically disconnected. **Prevents scan-based reverse engineering** of internal state and weights post-manufacturing.
+### 15. ~~Scan Chain Lockout~~ (REMOVED — open-source design)
+Removed: This is an open-source, open-design chip. Scan access is available for community testing and debugging.
 
-### 16. Layout-Level Netlist Obfuscation
-During OpenROAD placement, insert ~50 filler cells that are functionally inert but look like real logic in the layout. The routed connections create a misleading netlist when reverse-engineered from microscopy. An attacker must trace each filler to determine it's a dummy. **Increases reverse-engineering effort by ~10×** with zero functional cost.
+### 16. ~~Layout-Level Netlist Obfuscation~~ (REMOVED — open-source design)
+Removed: The full netlist is public. No need to obscure the layout.
 
 ### 17. Supply Chain Integrity Hash
 Compute a SHA-256 hash of the compiled weight bitstream at compile time and embed it in the chip's read-only register. At boot, the chip recomputes the hash of loaded weights and compares to the stored hash. If mismatched, the chip sets a tamper flag and refuses to operate. **Detects weight tampering** in transit or during loading.
@@ -63,5 +63,5 @@ Use SKY130's top metal layer (Metal 6) to create a grounded shield over the spec
 ### 19. Reproducible Build Verification
 Pin exact versions of all EDA tools (Yosys, OpenROAD, OpenLane, Magic) with SHA-256 hashes. Record the full build environment in a `tapeout/build_manifest.json` file. Before tapeout, verify that a clean rebuild produces a bit-identical GDSII. **Prevents supply chain injection of hardware trojans** via compromised EDA tools.
 
-### 20. Split Manufacturing Mask Set
-Split the mask set into front-end-of-line (FEOL — transistors) and back-end-of-line (BEOL — metal interconnect) layers. Send FEOL masks to SkyWater and BEOL masks to a second foundry. Neither foundry alone has the complete design. The complete chip only works when both halves are combined. **Prevents any single foundry from cloning the design** or inserting targeted trojans.
+### 20. ~~Split Manufacturing Mask Set~~ (REMOVED — open-source design)
+Removed: The complete design is public. No need to split masks across foundries for IP protection.

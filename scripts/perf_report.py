@@ -295,20 +295,18 @@ def generate_report() -> str:
 
     # ── Security Verification ──
     a("## Security Verification\n")
-    a("All 10 security measures from IMPROVEMENTS.md must be preserved.\n")
+    a("All security measures from IMPROVEMENTS.md must be preserved.\n")
+    a("Note: Logic locking, scan chain lockout, layout obfuscation, and split\n")
+    a("manufacturing were removed — this is an open-source open-design chip.\n\n")
     a("| Security Measure | Status |")
     a("|------------------|--------|")
     security_names = {
         "bitstream_encryption": "Bitstream Encryption (LFSR Cipher)",
-        "logic_locking": "Logic Locking (Spectral Mode Key)",
         "constant_time_mac": "Constant-Time Spectral MAC",
         "power_flattening_decoy": "Power Flattening (Decoy MAC)",
-        "scan_chain_lockout": "Scan Chain Lockout",
-        "layout_obfuscation": "Layout-Level Netlist Obfuscation",
         "integrity_hash": "Supply Chain Integrity Hash",
         "em_shielding": "EM Shielding (Top Metal Layer)",
         "reproducible_build": "Reproducible Build Verification",
-        "split_manufacturing": "Split Manufacturing Mask Set",
         "dvfs_secure_transition": "DVFS Secure Voltage Tracking",
     }
     for key, status in security.items():

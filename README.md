@@ -143,7 +143,7 @@ MIT (open-source, required for Google Open MPW / Tiny Tapeout submission)
 
 ## Author
 
-Walker — Oregon naturopathic physician & chip design enthusiast
+Walker — chip design enthusiast
 
 ## References
 
