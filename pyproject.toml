@@ -1,0 +1,15 @@
+[project]
+name = "spectral-silicon"
+version = "0.1.0"
+description = "Neural-operator-based custom chip for LLM inference"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

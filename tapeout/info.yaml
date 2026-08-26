@@ -1,0 +1,18 @@
+# Tiny Tapeout submission info
+project_name: "Spectral Silicon"
+author: "Walker"
+description: "Neural-operator-based spectral mixing accelerator for LLM inference. Replaces O(n²) self-attention with O(n log n) FFT-based spectral mixing."
+tags:
+  - ml-accelerator
+  - fft
+  - neural-operator
+  - llm
+  - spectral-mixing
+language: "Verilog"
+hdL_type: "Verilog"
+clock_hz: 50_000_000
+tile_size: 1
+wiki: ""
+github: ""
+discord: ""
+submitter: "Walker"
