@@ -1,0 +1,16 @@
+{
+  "_comment": "Template build manifest for reproducible tapeout. Run scripts/gen_manifest.py to generate the real one.",
+  "generated": "2026-08-26T00:00:00Z",
+  "tools": {
+    "yosys": "0.0.0",
+    "openroad": "0.0.0",
+    "iverilog": "12.0",
+    "python": "3.11.0",
+    "torch": "2.13.0"
+  },
+  "rtl_files": {},
+  "python_files": {},
+  "config_files": {},
+  "pdk": "sky130A",
+  "openlane_config_hash": ""
+}
