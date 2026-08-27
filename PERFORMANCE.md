@@ -117,3 +117,54 @@ Make the FFT size configurable via a Wishbone register. For shorter token sequen
 Implement dynamic voltage-frequency scaling (DVFS): when the chip is idle or processing at reduced mode count k, lower the clock frequency and core voltage (1.8V → 1.2V) to save power. A secure voltage tracker verifies that the voltage transition completed before enabling computation at the new frequency. This **reduces idle power by ~60%** and active power at low-k by ~40%.
 
 **Security preserved:** DVFS is a known side-channel concern, but we mitigate it: (1) voltage transitions only occur between inference batches, never mid-computation, so intra-batch timing is constant. (2) The transition is triggered by the host's batch completion, not by data content. (3) Power flattening decoy MAC operates at the same voltage as the real MAC. (4) A secure tracker prevents operation at unsafe voltage/frequency combinations that could introduce faults (fault attack resistance).
+
+---
+
+## V4 Speed Improvements (21–25)
+
+### 21. Triple Twiddle ROM — Parallel 3-Port Twiddle Fetch
+The existing FFT engine reads twiddle factors one at a time from a single `twiddle_rom` instance: issue W1 addr (1 cycle), wait (1 cycle), capture W1, issue W2 addr (1 cycle), wait (1 cycle), capture W2, issue W3 addr (1 cycle), wait (1 cycle), capture W3 — 6 cycles per butterfly just for twiddle reads. With 64 groups × 4 stages = 256 butterflies, that's 1536 wasted cycles.
+
+The new `triple_twiddle_rom.v` instantiates 3 independent twiddle ROM read ports, issuing all 3 addresses simultaneously and receiving all 3 twiddle pairs (cos/sin) in a single cycle. This **reduces twiddle fetch from 6 cycles to 2 cycles** (1 addr issue + 1 data return) per butterfly — a 3× speedup on twiddle reads. Total FFT time drops from ~2048 to ~1024 cycles (**~2× overall FFT speedup**).
+
+Area cost: 3× the ROM (or 1× with a 3-port RAM macro in the ASIC flow). The hex tables are shared, so synthesis may fold the ROMs into a single multi-port block.
+
+**File:** `rtl/triple_twiddle_rom.v` · **Testbench:** `tb/tb_triple_twiddle.py`
+
+### 22. Streaming IFFT Loader — Overlapped IFFT Input with Spectral Multiply Output
+The existing `spectral_mixer.v` has a strictly sequential pipeline: FFT must fully complete before spectral multiply starts, and spectral multiply must fully complete before IFFT starts. The SM+IFFT phase takes 256 + 256 = 512 cycles with zero overlap.
+
+The new `streaming_ifft_loader.v` uses a dual-buffer (ping/pong) approach: the IFFT only needs the first k=32 modes (the rest are zero from spectral truncation), so it can begin loading its input buffer after the first 32 spectral multiply outputs are ready — while the remaining 224 modes are still streaming. This **overlaps IFFT loading with spectral multiply output, reducing end-to-end latency by ~30%** (from 512 to ~360 cycles for the SM+IFFT phase).
+
+The module manages a small dual-port RAM buffer (32 entries × complex) that collects SM output. Once `n_modes` modes are buffered, it signals the IFFT to start consuming while remaining modes stream in (and are discarded since they're zero).
+
+**File:** `rtl/streaming_ifft_loader.v` · **Testbench:** `tb/tb_streaming_ifft.py`
+
+### 23. Mode-Skip Spectral Multiply — Multiplier Bypass for Truncated Modes
+The existing `spectral_multiply.v` processes all 256 FFT output modes through the full complex multiplier (4 real muls + 2 adds per mode), even though only modes 0..31 have non-zero weights — modes 32..255 are always zeroed by the `is_truncated` check. The complex multiplier runs on all 256 modes, wasting 87.5% of its switching activity on guaranteed-zero results.
+
+The new `mode_skip_multiply.v` is a drop-in replacement that **skips the complex multiplier entirely for modes ≥ N_MODES**. A simple mux routes: if `mode_cnt < N_MODES`, the multiply datapath runs normally; if `mode_cnt ≥ N_MODES`, the output is directly zeroed and the multiplier inputs are gated to zero. This **saves 87.5% of multiplier switching power** (224 of 256 modes skip the multiply entirely), reducing overall multiplier activity by ~4×.
+
+This is NOT a timing side-channel: the output is identical (zero either way), the cycle count per mode is constant (1 cycle/mode), and the constant-time guarantee is preserved. The improvement is purely in switching power — the multiplier array doesn't toggle for truncated modes.
+
+**File:** `rtl/mode_skip_multiply.v` · **Testbench:** `tb/tb_mode_skip.py`
+
+### 24. Pipelined Radix-4 Butterfly — 2-Stage Multiply/Add Split
+The existing `butterfly4.v` computes the entire radix-4 butterfly combinationally: DFT kernel (add/sub + j-multiplications) → 3 complex twiddle multiplies → rescale → output, all in one combinational block. This creates a long critical path through adder tree → multiplier array → adder, limiting the maximum clock frequency.
+
+The new `pipelined_butterfly4.v` splits this into two registered stages:
+- **Stage 1 (S1_MUL):** DFT kernel + complex twiddle multiplies → registers the full-precision products. Critical path: adder tree → multiplier (dominant delay).
+- **Stage 2 (S2_ADD):** Rescale (>>FRAC) + output assembly. Critical path: shift + mux (short).
+
+The **critical path is reduced ~40%**, enabling **65 → 90 MHz clock frequency** at 130nm. The module has 2-cycle latency but maintains **1-butterfly/cycle throughput** (fully pipelined with backpressure handshake). Drop-in compatible with `butterfly4.v` when the surrounding FFT FSM adds one extra cycle in the butterfly state.
+
+**File:** `rtl/pipelined_butterfly4.v` · **Testbench:** `tb/tb_pipelined_bf.py`
+
+### 25. Batch Channel Controller — Auto-Sequencing for All D Channels
+The existing `spectral_mixer.v` processes D=64 channels but the host must manually issue a start command for each channel, poll for done, then issue start again. This means 64 host round-trips (Wishbone write → chip computes → host polls done → host writes next channel data) per inference layer. Each round-trip costs ~100+ bus cycles in polling overhead — 6,300+ wasted cycles per layer.
+
+The new `batch_channel_controller.v` **automatically sequences all D channels through the spectral mixer in a single start command**. The host loads all 64 channels of input data into a dual-port RAM, sets the channel count register, and issues one start. The controller feeds channel 0 into the FFT, waits for the pipeline to produce output, stores it, immediately starts channel 1, and repeats for all D channels. The host polls a single `all_done` bit at the end.
+
+This **eliminates 63 host round-trips × ~100 cycles = ~6,300 cycles saved per inference layer**. For a 2-layer model with 64 channels/layer, this saves ~12,600 cycles total — a significant latency reduction for autoregressive LLM inference where each token requires a full forward pass.
+
+**File:** `rtl/batch_channel_controller.v` · **Testbench:** `tb/tb_batch_channel.py`

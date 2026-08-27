@@ -60,14 +60,19 @@ spectral-silicon/
 │   └── test_compiler.py
 ├── rtl/                     # Verilog hardware modules
 │   ├── butterfly2.v         # Radix-2 butterfly
-│   ├── butterfly4.v         # Radix-4 butterfly
+│   ├── butterfly4.v         # Radix-4 butterfly (combinational)
+│   ├── pipelined_butterfly4.v  # 2-stage pipelined radix-4 butterfly (v4)
+│   ├── triple_twiddle_rom.v    # 3-port parallel twiddle ROM (v4)
 │   ├── twiddle_rom.v        # Twiddle factor ROM
 │   ├── fft_stage.v          # Pipelined FFT stage
 │   ├── fft_256.v            # 256-point FFT module
 │   ├── ifft_256.v           # 256-point IFFT (conjugate method)
 │   ├── spectral_multiply.v # Spectral weight multiply + soft-threshold
+│   ├── mode_skip_multiply.v   # Multiplier bypass for truncated modes (v4)
 │   ├── modrelu.v            # modReLU activation
 │   ├── spectral_mixer.v    # Top-level spectral mixer
+│   ├── streaming_ifft_loader.v  # Overlapped IFFT loader (v4)
+│   ├── batch_channel_controller.v  # Auto-sequence all D channels (v4)
 │   ├── wishbone_if.v        # Wishbone bus interface
 │   ├── tt_wrapper.v         # Tiny Tapeout wrapper
 │   └── twiddle_data/        # Generated twiddle hex files
@@ -75,7 +80,12 @@ spectral-silicon/
 │   ├── tb_butterfly.py
 │   ├── tb_fft256.py
 │   ├── tb_spectral_mixer.py
-│   └── tb_wishbone.py
+│   ├── tb_wishbone.py
+│   ├── tb_triple_twiddle.py    # v4
+│   ├── tb_streaming_ifft.py   # v4
+│   ├── tb_mode_skip.py        # v4
+│   ├── tb_pipelined_bf.py     # v4
+│   └── tb_batch_channel.py    # v4
 ├── openlane/                # OpenLane configuration for SKY130
 │   └── config.json
 ├── tapeout/                 # Tapeout submission files
