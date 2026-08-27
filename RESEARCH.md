@@ -185,6 +185,106 @@ On SG13G2 or SKY130 analog tiles:
 - Analog crossbar arrays for the spectral weight multiply (compute-in-memory)
 - ADC/DAC at the boundary for digital interface
 
+### 3.6 ChipIgnite: Scaling Beyond Tiny Tapeout
+
+Tiny Tapeout gives ~1mm² of silicon — enough for the spectral mixer core (~40K gates). But a full transformer layer needs more: LayerNorm, residual connections, embeddings, unembedding, FFN, and sampling. ChipIgnite provides the area to fit all of these.
+
+#### ChipIgnite vs. Tiny Tapeout
+
+| Parameter | Tiny Tapeout | ChipIgnite |
+|-----------|-------------|------------|
+| **Cost** | $50–$500/tile | $14,950/project |
+| **User area** | ~1mm² | **~10mm²** (Caravel/Caravan) or ~15mm² (OpenFrame) |
+| **PDK** | SKY130, GF180, IHP SG13G2 | SKY130 |
+| **I/O** | Limited (shared pins) | 38–44 programmable GPIOs |
+| **Included** | Packaged chip | 100 QFN parts + eval board + 10 M.2 cards |
+| **Open-source required?** | No | No (private designs allowed) |
+| **Timeline** | ~3 months | ~5 months |
+| **Shuttle** | Frequent | 2 in 2025, 3 in 2026 |
+
+#### SoC Platforms
+
+ChipIgnite offers several pre-built SoC wrappers:
+
+- **Caravel**: Standard SoC with 38 GPIOs, ~10mm² user area, RISC-V management core
+- **Caravan**: Bare pad prototyping, 27 GPIOs + 11 bare pads, ~10mm²
+- **OpenFrame**: Advanced IO, 44 configurable GPIOs, ~15mm² user area
+- **Caravel Mini**: Compact, 36 GPIOs, ~2mm²
+
+The RISC-V core in Caravel handles Wishbone bus management, weight loading, and host communication — the user area is entirely for our spectral silicon design.
+
+#### What Fits in 10mm²
+
+SKY130 high-density standard cells deliver ~100K routed gates/mm² (170K raw, derated for routing). In 10mm²:
+
+| Component | Gates | SRAM | Area |
+|-----------|-------|------|------|
+| Spectral mixer core (existing) | 40K | 0 | 0.4mm² |
+| Residual connections | 0.2K | 0 | 0.002mm² |
+| LayerNorm | 1.5K | 0 | 0.015mm² |
+| GELU/SiLU activation | 0.5K | 0 | 0.005mm² |
+| Softmax (vocab=128) | 1K | 0 | 0.01mm² |
+| Top-k sampler | 0.5K | 0 | 0.005mm² |
+| Token embeddings | 0.5K | 16KB | ~0.1mm² |
+| Unembedding | 3K | 16KB | ~0.1mm² |
+| Weight cache (4 layers) | 0.2K | 4KB | ~0.03mm² |
+| FFN (d_ffn=128) | 3K | 32KB | ~0.2mm² |
+| **Total** | **~50.4K** | **~68KB** | **~0.87mm²** |
+
+That's under 1mm² — leaving ~9mm² for additional layers, parallel channel processing, or larger FFN dimensions. We could fit:
+
+- **4 complete transformer layers** (~3.5mm² total) with the remaining area for I/O and routing
+- **Multi-head parallel processing** (2× spectral mixer cores for 2× throughput)
+- **Larger FFN** (d_ffn=256, the full standard size, doubling FFN area)
+- **On-chip weight ROM** for multiple models
+
+#### SKY130 SRAM Macros
+
+Available SRAM macros for SKY130:
+- Open-source (VLSIDA/OpenRAM): 1KB, 2KB, 4KB, 16KB
+- Commercial (ChipFoundry): 8KB, 32KB, 64KB with Wishbone interface
+- 64KB SRAM macro: 680µm × 3260µm (~2.2mm²)
+
+For our design, several 4KB or 16KB macros placed around the periphery would provide the weight and embedding storage. The spectral mixer's existing register-file approach works for the 32 complex weights (1KB); larger storage (embeddings, FFN weights) needs SRAM macros.
+
+#### Recommended ChipIgnite Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                ChipIgnite (10mm²)                      │
+│                                                       │
+│  ┌─────────┐  ┌──────────┐  ┌──────────┐            │
+│  │ Token   │→│ Spectral  │→│ Residual │            │
+│  │ Embed   │  │ Mixer ×4  │  │ + LN    │            │
+│  │ (16KB)  │  │ (layers)  │  │         │            │
+│  └─────────┘  └──────────┘  └────┬─────┘            │
+│                                  │                    │
+│  ┌─────────┐  ┌──────────┐  ┌────▼─────┐            │
+│  │ Top-k   │←│ Softmax   │←│ FFN      │            │
+│  │ Sampler │  │ (vocab   │  │ (d=128)  │            │
+│  │         │  │  =128)   │  │ (32KB)   │            │
+│  └─────────┘  └──────────┘  └──────────┘            │
+│                                                       │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Weight SRAM Cache (4 layers × 1KB)         │    │
+│  │  + Unembedding Weights (16KB)                │    │
+│  └─────────────────────────────────────────────┘    │
+│                                                       │
+│  ┌─────────────────────────────────────────────┐    │
+│  │  Caravel RISC-V SoC (management core)       │    │
+│  │  Wishbone bus, UART, SPI, GPIO              │    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
+```
+
+With ChipIgnite, the chip accepts raw token IDs, runs 4 complete spectral transformer layers (embeddings → spectral mixing → residual + LayerNorm → FFN), computes logits, applies softmax, and samples the next token — all on-chip. The host only manages the autoregressive loop (sending the previous token, reading the next).
+
+#### Current Shuttle Schedule (as of 2026)
+
+- **CC2509**: Deadline Sep 16, 2025 → Delivery Feb 2026 (past)
+- **CC2511**: Deadline Nov 11, 2025 → Delivery Apr 2026 (past)
+- **2026**: Three shuttles planned, dates TBD
+
 ---
 
 ## 4. References

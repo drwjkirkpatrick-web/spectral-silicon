@@ -156,6 +156,17 @@ Once the math is validated, we translate it into RTL. The `rtl/` directory conta
 - `batch_channel_controller.v` — Auto-sequences all 64 channels in one command (~6,300 cycles saved)
 - Plus `pipelined_butterfly4.v` and `triple_twiddle_rom.v` (listed above)
 
+**LLM component modules** (V5, 9 new modules — full transformer on chip):
+- `residual_add.v` — Residual connection adder (mixer_out + input, with saturation)
+- `layernorm.v` — LayerNorm for d_model=64 (two-phase: accumulate → normalize)
+- `gelu_silu.v` — GELU/SiLU activation for the FFN (piecewise linear, mode-selectable)
+- `softmax.v` — Softmax over vocab=128 (exp LUT + reciprocal, two-phase)
+- `topk_sampler.v` — Top-k token sampling with LFSR randomness (k=1..8)
+- `token_embedding.v` — Token embedding lookup (128×64×16-bit = 16KB)
+- `unembedding.v` — Logits projection (d_model=64 → vocab=128, serialized MAC)
+- `ffn.v` — Feed-forward network (d_model=64, d_ffn=128, GELU, serialized MAC)
+- `weight_cache.v` — Multi-layer weight cache SRAM (4 layers × 32 modes = 4KB)
+
 **Tapeout wrappers**:
 - `tt_wrapper.v` / `tt_wrapper_v2.v` — Tiny Tapeout package wrappers
 - `tt_wrapper_v2.v` — Updated for V2+ module set
@@ -298,11 +309,11 @@ spectral-silicon/
 │   ├── test_security.py     # Security properties
 │   └── test_perf_sim.py     # Performance simulation
 │
-├── rtl/                     # Verilog hardware modules (44 files, ~7,300 lines)
+├── rtl/                     # Verilog hardware modules (53 files, ~10,000+ lines)
 │   ├── (see Stage 2 above for full module listing)
 │   └── twiddle_data/        # Generated twiddle factor hex files
 │
-├── tb/                      # cocotb testbenches (9 files)
+├── tb/                      # cocotb testbenches (18 files)
 │   ├── tb_butterfly.py      # Radix-4 butterfly tests
 │   ├── tb_fft256.py         # 256-point FFT tests
 │   ├── tb_spectral_mixer.py # Full pipeline tests
@@ -311,7 +322,16 @@ spectral-silicon/
 │   ├── tb_streaming_ifft.py # Overlapped IFFT loader (v4)
 │   ├── tb_mode_skip.py      # Mode-skip multiply (v4)
 │   ├── tb_pipelined_bf.py   # Pipelined butterfly (v4)
-│   └── tb_batch_channel.py # Batch channel controller (v4)
+│   ├── tb_batch_channel.py # Batch channel controller (v4)
+│   ├── tb_residual_add.py   # Residual connections (v5)
+│   ├── tb_layernorm.py      # LayerNorm (v5)
+│   ├── tb_gelu_silu.py      # GELU/SiLU activation (v5)
+│   ├── tb_softmax.py        # Softmax (v5)
+│   ├── tb_topk_sampler.py   # Top-k sampling (v5)
+│   ├── tb_token_embedding.py # Token embeddings (v5)
+│   ├── tb_unembedding.py   # Unembedding / logits (v5)
+│   ├── tb_ffn.py            # Feed-forward network (v5)
+│   └── tb_weight_cache.py  # Weight cache (v5)
 │
 ├── openlane/                # OpenLane configuration for SKY130
 │   └── config.json
