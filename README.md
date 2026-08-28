@@ -4,13 +4,13 @@
 ![Process](https://img.shields.io/badge/SkyWater-SKY130_130nm-green)
 ![Program](https://img.shields.io/badge/Tiny%20Tapeout-$50–$500-orange)
 ![Status](https://img.shields.io/badge/status-simulation_passing-brightgreen)
-![Tests](https://img.shields.io/badge/tests-337%20passed-brightgreen)
-![Architecture](https://img.shields.io/badge/arch-~42K%20gates%20%7C%201mm%C2%B2-red)
+![Tests](https://img.shields.io/badge/tests-354%20passed-brightgreen)
+![Architecture](https://img.shields.io/badge/arch-~50K%20gates%20%7C%201mm%C2%B2-red)
 ![Complexity](https://img.shields.io/badge/complexity-O(n%20log%20n)-blueviolet)
 ![Clock](https://img.shields.io/badge/clock-120%20MHz%20(V6)-success)
 ![Language](https://img.shields.io/badge/RTL-Verilog%202005-informational)
 ![Framework](https://img.shields.io/badge/ML%20sim-PyTorch-ee7722)
-![Improvements](https://img.shields.io/badge/improvements-45%20(V1–V6)-9cf)
+![Improvements](https://img.shields.io/badge/improvements-53%20(V1–V7)-9cf)
 ![Gateways](https://img.shields.io/badge/FFT→multiply→IFFT→activate-9cf)
 
 `asic` · `sky130` · `tiny-tapeout` · `llm` · `neural-operator` · `fft` · `verilog` · `hardware` · `chip-design` · `spectral-mixing`
@@ -120,7 +120,7 @@ The training is standard PyTorch — Adam optimizer, cross-entropy loss, gradien
 
 ### Stage 2: Build the Hardware in Verilog
 
-Once the math is validated, we translate it into RTL. The `rtl/` directory contains 73 Verilog modules — the complete hardware design in Verilog-2005:
+Once the math is validated, we translate it into RTL. The `rtl/` directory contains 81 Verilog modules — the complete hardware design in Verilog-2005:
 
 **Core datapath** (the chip's main pipeline):
 - `fft_256.v` — 256-point FFT (4 radix-4 stages, in-place RAM)
@@ -402,6 +402,7 @@ The design evolved through 5 versions, each adding speed, efficiency, and reliab
 | **V3** | 1–20 (PERFORMANCE.md) | Performance (BFP arithmetic, FMA butterfly, DMA, RFFT, deep pipeline, DVFS) |
 | **V4** | 21–25 (PERFORMANCE.md) | Speed: triple twiddle ROM, streaming IFFT, mode-skip multiply, pipelined butterfly, batch channel controller |
 | **V6** | 26–45 (PERFORMANCE.md) | Clock speed (90→120 MHz), throughput (channel interleave, burst I/O), reliability (parity, checksum, thermal throttle) |
+| **V7** | 46–53 (PERFORMANCE.md) | Advanced butterfly cores: split-radix (-35% mults), radix-8 (-33% mults), 4× parallel array, constant-geometry, Stockham, CORDIC twiddle |
 
 See [IMPROVEMENTS.md](IMPROVEMENTS.md) for V1→V2 details and [PERFORMANCE.md](PERFORMANCE.md) for V3→V6 details.
 

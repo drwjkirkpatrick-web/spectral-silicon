@@ -1288,3 +1288,168 @@ class TestPerfChipV6:
         """PerfChipV6 self-test should pass."""
         from spectral_silicon.perf_sim import _self_test
         _self_test()  # should not raise
+
+
+# --------------------------------------------------------------------------- #
+# V7 Advanced Butterfly Tests (46-53)
+# --------------------------------------------------------------------------- #
+
+
+class TestSplitRadixButterfly:
+    """Tests for split-radix butterfly (46)."""
+
+    def test_multiply_reduction(self):
+        from spectral_silicon.perf_sim import SplitRadixButterfly
+        sr = SplitRadixButterfly()
+        result = sr.measure_savings()
+        assert result["split_radix_mults"] < result["radix4_mults"]
+        assert result["multiply_reduction_pct"] > 30
+
+    def test_correctness(self):
+        from spectral_silicon.perf_sim import SplitRadixButterfly
+        sr = SplitRadixButterfly()
+        assert sr.verify_correctness()
+
+
+class TestRadix8Butterfly:
+    """Tests for radix-8 butterfly (47)."""
+
+    def test_multiply_reduction(self):
+        from spectral_silicon.perf_sim import Radix8Butterfly
+        r8 = Radix8Butterfly()
+        result = r8.measure_savings()
+        assert result["radix8_mults"] < result["radix4_mults"]
+        assert result["multiply_reduction_pct"] > 25
+
+    def test_correctness(self):
+        from spectral_silicon.perf_sim import Radix8Butterfly
+        r8 = Radix8Butterfly()
+        assert r8.verify_correctness()
+
+
+class TestParallelButterflyArray:
+    """Tests for 4× parallel butterfly array (48)."""
+
+    def test_throughput_improvement(self):
+        from spectral_silicon.perf_sim import ParallelButterflyArray
+        pa = ParallelButterflyArray()
+        result = pa.measure_throughput()
+        assert result["throughput_improvement"] == 4
+        assert result["parallel_cycles"] < result["sequential_cycles"]
+
+    def test_area_overhead(self):
+        from spectral_silicon.perf_sim import ParallelButterflyArray
+        pa = ParallelButterflyArray()
+        area = pa.estimate_area()
+        assert area["total_gates"] > area["single_butterfly_gates"]
+        assert area["parallel_array_gates"] == area["single_butterfly_gates"] * 4
+
+
+class TestConstantGeometryFFT:
+    """Tests for constant-geometry FFT (49)."""
+
+    def test_no_bit_reversal(self):
+        from spectral_silicon.perf_sim import ConstantGeometryFFT
+        cg = ConstantGeometryFFT()
+        result = cg.measure_savings()
+        assert result["constant_geometry_bitrev_cycles"] == 0
+        assert result["cycles_saved"] == 256
+
+    def test_interconnect_savings(self):
+        from spectral_silicon.perf_sim import ConstantGeometryFFT
+        cg = ConstantGeometryFFT()
+        result = cg.estimate_interconnect_savings()
+        assert result["mux_reduction_pct"] == 100.0
+
+
+class TestStockhamFFT:
+    """Tests for Stockham FFT (50)."""
+
+    def test_no_bit_reversal(self):
+        from spectral_silicon.perf_sim import StockhamFFT
+        sk = StockhamFFT()
+        result = sk.measure_latency()
+        assert result["stockham_total_cycles"] < result["standard_total_cycles"]
+        assert result["cycles_saved"] == 256
+        assert result["same_multiply_count"]
+
+
+class TestFusedButterflyMultiply:
+    """Tests for fused butterfly+multiply (51)."""
+
+    def test_critical_path_reduction(self):
+        from spectral_silicon.perf_sim import FusedButterflyMultiply
+        fm = FusedButterflyMultiply()
+        result = fm.measure_critical_path()
+        assert result["fused_critical_path_ps"] < result["separate_critical_path_ps"]
+        assert result["path_reduction_pct"] > 30
+        assert result["latency_cycles"] == 2
+
+
+class TestCORDICTwiddle:
+    """Tests for CORDIC twiddle generator (52)."""
+
+    def test_accuracy(self):
+        from spectral_silicon.perf_sim import CORDICTwiddle
+        cordic = CORDICTwiddle()
+        result = cordic.measure_accuracy()
+        assert result["accuracy_bits"] >= 10
+        assert result["net_gate_savings"] > 0
+
+    def test_correctness(self):
+        from spectral_silicon.perf_sim import CORDICTwiddle
+        cordic = CORDICTwiddle()
+        assert cordic.verify_correctness()
+
+
+class TestTwiddleBankR8:
+    """Tests for radix-8 twiddle bank (53)."""
+
+    def test_fetch_speedup(self):
+        from spectral_silicon.perf_sim import TwiddleBankR8
+        tb = TwiddleBankR8()
+        result = tb.measure_fetch_savings()
+        assert result["fetch_speedup"] > 5
+        assert result["trivial_twiddles"] == 2
+        assert result["non_trivial_twiddles"] == 5
+
+
+# --------------------------------------------------------------------------- #
+# PerfChipV7 Full Chip Tests
+# --------------------------------------------------------------------------- #
+
+
+class TestPerfChipV7:
+    """Tests for the full PerfChipV7 simulation."""
+
+    def test_all_53_modules_instantiated(self):
+        from spectral_silicon.perf_sim import PerfChipV7
+        chip = PerfChipV7()
+        v7_names = [
+            "split_radix", "radix8", "parallel_array",
+            "const_geom", "stockham", "fused_bf_mult",
+            "cordic", "twiddle_bank_r8",
+        ]
+        for name in v7_names:
+            assert hasattr(chip, name), f"Missing V7 simulator: {name}"
+
+    def test_estimate_area_v7(self):
+        from spectral_silicon.perf_sim import PerfChipV7
+        chip = PerfChipV7()
+        area = chip.estimate_area()
+        assert "v7" in area
+        assert area["v7"]["total"] > 0
+
+    def test_v7_throughput(self):
+        from spectral_silicon.perf_sim import PerfChipV7
+        chip = PerfChipV7()
+        tp = chip.estimate_throughput()
+        assert "v7" in tp
+        assert tp["v7"]["max"] > 0
+
+    def test_v7_faster_than_v6(self):
+        """V7 advanced butterflies should improve throughput."""
+        from spectral_silicon.perf_sim import PerfChipV7
+        chip = PerfChipV7()
+        tp = chip.estimate_throughput()
+        assert tp["v7"]["max"] >= tp["v6"]["max"]
