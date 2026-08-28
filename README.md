@@ -1,5 +1,7 @@
 🔥 # Spectral Silicon — A Custom Chip That Makes LLM Inference Faster by Ditching Attention
 
+`asic` · `sky130` · `tiny-tapeout` · `llm` · `neural-operator` · `fft` · `verilog` · `hardware` · `chip-design` · `spectral-mixing`
+
 ## What If We Stopped Doing Attention in Hardware?
 
 Here's the thing: every large language model today is bottlenecked by **self-attention** — the O(n²) operation where every token has to look at every other token. It's powerful, yes. But in silicon, it's a monster. A 256×256 attention matrix at 130nm needs 256KB of SRAM and 65,000 multiply-accumulators. That doesn't fit on a small chip.
