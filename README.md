@@ -1,14 +1,25 @@
-🔥 # Spectral Silicon — A Custom Chip That Makes LLM Inference Faster by Ditching Attention
+# 🔥 Spectral Silicon — A Custom Chip That Makes LLM Inference Faster by Replacing Attention with Spectral Mixing
+
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Process](https://img.shields.io/badge/SkyWater-SKY130_130nm-green)
+![Program](https://img.shields.io/badge/Tiny%20Tapeout-$50–$500-orange)
+![Status](https://img.shields.io/badge/status-simulation_passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-285%20passed-brightgreen)
+![Architecture](https://img.shields.io/badge/arch-~40K%20gates%20%7C%201mm%C2%B2-red)
+![Complexity](https://img.shields.io/badge/complexity-O(n%20log%20n)-blueviolet)
+![Language](https://img.shields.io/badge/RTL-Verilog%202005-informational)
+![Framework](https://img.shields.io/badge/ML%20sim-PyTorch-ee7722)
+![Gateways](https://img.shields.io/badge/FFT→multiply→IFFT→activate-9cf)
 
 `asic` · `sky130` · `tiny-tapeout` · `llm` · `neural-operator` · `fft` · `verilog` · `hardware` · `chip-design` · `spectral-mixing`
 
-## What If We Stopped Doing Attention in Hardware?
+## What If Attention Worked Differently — in Silicon?
 
 Here's the thing: every large language model today is bottlenecked by **self-attention** — the O(n²) operation where every token has to look at every other token. It's powerful, yes. But in silicon, it's a monster. A 256×256 attention matrix at 130nm needs 256KB of SRAM and 65,000 multiply-accumulators. That doesn't fit on a small chip.
 
-So we asked a simple question: **what if we replaced attention with something that scales better — and is actually easier to build in hardware?**
+So we asked a different question: **what if token mixing — the job attention does — could be done a better way in hardware?**
 
-That's Spectral Silicon. A custom ASIC that replaces O(n²) attention with O(n log n) **spectral mixing** — Fourier transforms, diagonal weight multiplies, and a couple of activation functions — all implemented directly in silicon on the open-source SkyWater SKY130 process. The whole chip fits in ~40,000 gates, about 1 square millimeter.
+That's Spectral Silicon. A custom ASIC that does O(n²) attention's job using O(n log n) **spectral mixing** — Fourier transforms, diagonal weight multiplies, and a couple of activation functions — all implemented directly in silicon on the open-source SkyWater SKY130 process. The whole chip fits in ~40,000 gates, about 1 square millimeter.
 
 You can fabricate it for $50–$500 through Tiny Tapeout.
 
