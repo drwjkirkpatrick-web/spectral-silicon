@@ -4,11 +4,13 @@
 ![Process](https://img.shields.io/badge/SkyWater-SKY130_130nm-green)
 ![Program](https://img.shields.io/badge/Tiny%20Tapeout-$50–$500-orange)
 ![Status](https://img.shields.io/badge/status-simulation_passing-brightgreen)
-![Tests](https://img.shields.io/badge/tests-285%20passed-brightgreen)
-![Architecture](https://img.shields.io/badge/arch-~40K%20gates%20%7C%201mm%C2%B2-red)
+![Tests](https://img.shields.io/badge/tests-337%20passed-brightgreen)
+![Architecture](https://img.shields.io/badge/arch-~42K%20gates%20%7C%201mm%C2%B2-red)
 ![Complexity](https://img.shields.io/badge/complexity-O(n%20log%20n)-blueviolet)
+![Clock](https://img.shields.io/badge/clock-120%20MHz%20(V6)-success)
 ![Language](https://img.shields.io/badge/RTL-Verilog%202005-informational)
 ![Framework](https://img.shields.io/badge/ML%20sim-PyTorch-ee7722)
+![Improvements](https://img.shields.io/badge/improvements-45%20(V1–V6)-9cf)
 ![Gateways](https://img.shields.io/badge/FFT→multiply→IFFT→activate-9cf)
 
 `asic` · `sky130` · `tiny-tapeout` · `llm` · `neural-operator` · `fft` · `verilog` · `hardware` · `chip-design` · `spectral-mixing`
@@ -118,7 +120,7 @@ The training is standard PyTorch — Adam optimizer, cross-entropy loss, gradien
 
 ### Stage 2: Build the Hardware in Verilog
 
-Once the math is validated, we translate it into RTL. The `rtl/` directory contains 44 Verilog modules — the complete hardware design in Verilog-2005:
+Once the math is validated, we translate it into RTL. The `rtl/` directory contains 73 Verilog modules — the complete hardware design in Verilog-2005:
 
 **Core datapath** (the chip's main pipeline):
 - `fft_256.v` — 256-point FFT (4 radix-4 stages, in-place RAM)
@@ -168,6 +170,28 @@ Once the math is validated, we translate it into RTL. The `rtl/` directory conta
 - `mode_skip_multiply.v` — Bypasses the multiplier for truncated modes (87.5% power savings)
 - `batch_channel_controller.v` — Auto-sequences all 64 channels in one command (~6,300 cycles saved)
 - Plus `pipelined_butterfly4.v` and `triple_twiddle_rom.v` (listed above)
+
+**Clock speed & architecture** (V6, 20 new modules):
+- `retimed_pipeline_regs.v` — Retimed pipeline registers for critical path balancing (100→120 MHz)
+- `clock_tree_optimizer.v` — H-tree clock distribution, <50ps skew
+- `multistage_spectral_mult.v` — 3-stage pipelined spectral multiply (90→110 MHz)
+- `weight_reg_bank.v` — 4-bank weight register file for parallel access
+- `operand_isolation.v` — Clock gating for inactive pipeline stages (~25% power savings)
+- `wider_datapath.v` — 18-bit Q12.4 hybrid datapath (16× overflow headroom)
+- `sta_fixup_buffers.v` — Buffer chains on 5 longest STA paths
+- `speculative_ifft.v` — Speculative IFFT start with rollback (~2% rollback rate)
+- `multiport_weight_sram.v` — Dual-port weight SRAM (halves spectral multiply cycles)
+- `fused_fft_ifft.v` — Fully shared FFT/IFFT datapath (saves ~8K gates)
+- `channel_interleave.v` — Token interleaving with double buffering (2× autoregressive throughput)
+- `configurable_pipeline.v` — Runtime-selectable pipeline depth (2/4/8 stages)
+- `wishbone_burst_write.v` — Burst write for input data (4× faster loading)
+- `output_streaming_fifo.v` — Output streaming with backpressure (~224 cycles latency saved)
+- `layer_scheduler.v` — Hardware layer scheduler with automatic weight swapping
+- `parity_error_detect.v` — Parity checks on FFT stage outputs
+- `guard_bands.v` — Guard band saturation at 95% of max
+- `sticky_overflow_counter.v` — Overflow event tracking per inference pass
+- `redundant_checksum.v` — Checksum verification for error detection
+- `thermal_throttle.v` — Thermal throttle with graceful k reduction
 
 **LLM component modules** (V5, 9 new modules — full transformer on chip):
 - `residual_add.v` — Residual connection adder (mixer_out + input, with saturation)
@@ -367,9 +391,9 @@ spectral-silicon/
 
 ---
 
-## The 25 Performance Improvements
+## The 45 Performance Improvements
 
-The design evolved through 4 versions, each adding speed and efficiency improvements:
+The design evolved through 5 versions, each adding speed, efficiency, and reliability improvements:
 
 | Version | Improvements | Focus |
 |---------|-------------|-------|
@@ -377,8 +401,9 @@ The design evolved through 4 versions, each adding speed and efficiency improvem
 | **V2** | 1–20 (IMPROVEMENTS.md) | Efficiency (shared FFT/IFFT, Booth multipliers, ping-pong RAM) + security (constant-time, power flattening, weight encryption) |
 | **V3** | 1–20 (PERFORMANCE.md) | Performance (BFP arithmetic, FMA butterfly, DMA, RFFT, deep pipeline, DVFS) |
 | **V4** | 21–25 (PERFORMANCE.md) | Speed: triple twiddle ROM, streaming IFFT, mode-skip multiply, pipelined butterfly, batch channel controller |
+| **V6** | 26–45 (PERFORMANCE.md) | Clock speed (90→120 MHz), throughput (channel interleave, burst I/O), reliability (parity, checksum, thermal throttle) |
 
-See [IMPROVEMENTS.md](IMPROVEMENTS.md) for V1→V2 details and [PERFORMANCE.md](PERFORMANCE.md) for V3→V4 details.
+See [IMPROVEMENTS.md](IMPROVEMENTS.md) for V1→V2 details and [PERFORMANCE.md](PERFORMANCE.md) for V3→V6 details.
 
 ---
 
