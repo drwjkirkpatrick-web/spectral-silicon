@@ -36,19 +36,19 @@ def small_input():
 
 class TestFNOShape:
     def test_output_shape_matches_input(self, small_input):
-        fno = FourierNeuralOperator(channels=8, modes=4)
+        fno = FourierNeuralOperator(channels=8, n_modes=4)
         out = fno(small_input)
         assert out.shape == small_input.shape
 
     def test_output_shape_various(self):
         for batch, seq_len, ch in [(1, 8, 4), (3, 32, 16), (2, 64, 8)]:
             x = torch.randn(batch, seq_len, ch)
-            fno = FourierNeuralOperator(channels=ch, modes=min(seq_len // 2, 4))
+            fno = FourierNeuralOperator(channels=ch, n_modes=min(seq_len // 2, 4))
             out = fno(x)
             assert out.shape == x.shape, f"shape mismatch for {x.shape}"
 
     def test_dtype_preserved(self, small_input):
-        fno = FourierNeuralOperator(channels=8, modes=4)
+        fno = FourierNeuralOperator(channels=8, n_modes=4)
         out = fno(small_input)
         assert out.dtype == small_input.dtype
 
@@ -58,7 +58,7 @@ class TestFNOZeroModes:
     so the output equals the (possible) residual/identity path."""
 
     def test_zero_modes_identity(self, small_input):
-        fno = FourierNeuralOperator(channels=8, modes=0)
+        fno = FourierNeuralOperator(channels=8, n_modes=0)
         out = fno(small_input)
         # With zero modes the spectral branch contributes nothing; if the
         # layer has a skip/identity it should return the input unchanged.
@@ -67,7 +67,7 @@ class TestFNOZeroModes:
         )
 
     def test_zero_modes_shape(self, small_input):
-        fno = FourierNeuralOperator(channels=8, modes=0)
+        fno = FourierNeuralOperator(channels=8, n_modes=0)
         out = fno(small_input)
         assert out.shape == small_input.shape
 
@@ -78,7 +78,7 @@ class TestFNOZeroModes:
 
 class TestFNOGradient:
     def test_gradient_flow(self, small_input):
-        fno = FourierNeuralOperator(channels=8, modes=4)
+        fno = FourierNeuralOperator(channels=8, n_modes=4)
         x = small_input.clone().requires_grad_(True)
         out = fno(x)
         loss = out.sum()
@@ -88,7 +88,7 @@ class TestFNOGradient:
         assert torch.isfinite(x.grad).all()
 
     def test_gradient_flows_to_weights(self, small_input):
-        fno = FourierNeuralOperator(channels=8, modes=4)
+        fno = FourierNeuralOperator(channels=8, n_modes=4)
         out = fno(small_input)
         out.sum().backward()
         params = list(fno.parameters())
@@ -106,19 +106,19 @@ class TestFNOOptions:
     @pytest.mark.parametrize("modes", [1, 2, 4, 8])
     def test_different_k_values(self, modes):
         x = torch.randn(2, 16, 8)
-        fno = FourierNeuralOperator(channels=8, modes=modes)
+        fno = FourierNeuralOperator(channels=8, n_modes=modes)
         out = fno(x)
         assert out.shape == x.shape
 
     def test_more_modes_changes_output(self):
         x = torch.randn(2, 16, 8)
-        fno_low = FourierNeuralOperator(channels=8, modes=1)
-        fno_high = FourierNeuralOperator(channels=8, modes=8)
+        fno_low = FourierNeuralOperator(channels=8, n_modes=1)
+        fno_high = FourierNeuralOperator(channels=8, n_modes=8)
         # Initialize identically (same seed), then they differ only in modes.
         torch.manual_seed(0)
-        fno_low = FourierNeuralOperator(channels=8, modes=1)
+        fno_low = FourierNeuralOperator(channels=8, n_modes=1)
         torch.manual_seed(0)
-        fno_high = FourierNeuralOperator(channels=8, modes=8)
+        fno_high = FourierNeuralOperator(channels=8, n_modes=8)
         out_low = fno_low(x)
         out_high = fno_high(x)
         assert not torch.allclose(out_low, out_high, atol=1e-4), (
@@ -128,7 +128,7 @@ class TestFNOOptions:
     def test_modes_exceeding_half_seq(self):
         # modes > seq_len//2 should not crash — the layer clamps internally.
         x = torch.randn(1, 8, 4)
-        fno = FourierNeuralOperator(channels=4, modes=10)
+        fno = FourierNeuralOperator(channels=4, n_modes=10)
         out = fno(x)
         assert out.shape == x.shape
 
@@ -141,7 +141,7 @@ class TestFNOOptions:
 class TestFNOSlow:
     def test_long_sequence(self):
         x = torch.randn(1, 512, 32)
-        fno = FourierNeuralOperator(channels=32, modes=16)
+        fno = FourierNeuralOperator(channels=32, n_modes=16)
         out = fno(x)
         assert out.shape == x.shape
         assert torch.isfinite(out).all()

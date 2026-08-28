@@ -38,7 +38,7 @@ class TestModReLU:
     """modReLU(z) = z * sign(|z| + b), elementwise on complex values."""
 
     def test_modrelu_formula_scalar(self):
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         z_re = torch.tensor([0.6])
         z_im = torch.tensor([0.8])
         bias = torch.tensor([-0.5])
@@ -57,7 +57,7 @@ class TestModReLU:
 
     def test_modrelu_zeromag_negative_bias(self):
         """|z|=0, b<0 → sign(0 + b) = -1 → output -z = 0."""
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         z_re = torch.tensor([0.0])
         z_im = torch.tensor([0.0])
         bias = torch.tensor([-1.0])
@@ -73,7 +73,7 @@ class TestModReLU:
 
     def test_modrelu_large_mag(self):
         """|z| large, b=0 → sign positive → output = z."""
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         z_re = torch.tensor([3.0])
         z_im = torch.tensor([4.0])
         bias = torch.tensor([0.0])
@@ -88,7 +88,7 @@ class TestModReLU:
         assert torch.allclose(out_im, z_im, atol=1e-5)
 
     def test_modrelu_batch(self):
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         z_re = torch.randn(4, 16, 8)
         z_im = torch.randn(4, 16, 8)
         bias = torch.randn(8)
@@ -106,17 +106,17 @@ class TestModReLU:
 
 class TestFFTNetForward:
     def test_output_shape(self, small_input):
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         out = layer(small_input)
         assert out.shape == small_input.shape
 
     def test_finite_output(self, small_input):
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         out = layer(small_input)
         assert torch.isfinite(out).all()
 
     def test_gradient_flow(self, small_input):
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         x = small_input.clone().requires_grad_(True)
         out = layer(x)
         out.sum().backward()
@@ -124,7 +124,7 @@ class TestFFTNetForward:
         assert torch.isfinite(x.grad).all()
 
     def test_gradient_to_weights(self, small_input):
-        layer = FFTNetLayer(channels=8, modes=4)
+        layer = FFTNetLayer(channels=8, n_modes=4)
         out = layer(small_input)
         out.sum().backward()
         for p in layer.parameters():
@@ -147,7 +147,7 @@ class TestFFTNetScaling:
         times = {}
         for seq_len in [128, 256, 512, 1024]:
             x = torch.randn(1, seq_len, 16)
-            layer = FFTNetLayer(channels=16, modes=seq_len // 4)
+            layer = FFTNetLayer(channels=16, n_modes=seq_len // 4)
             # warmup
             for _ in range(3):
                 _ = layer(x)
@@ -178,13 +178,13 @@ class TestFFTNetSeqLen:
     @pytest.mark.parametrize("seq_len", [8, 16, 32, 64, 128])
     def test_different_seq_lengths(self, seq_len):
         x = torch.randn(1, seq_len, 8)
-        layer = FFTNetLayer(channels=8, modes=min(seq_len // 2, 4))
+        layer = FFTNetLayer(channels=8, n_modes=min(seq_len // 2, 4))
         out = layer(x)
         assert out.shape == x.shape
 
     def test_long_sequence(self):
         x = torch.randn(1, 256, 16)
-        layer = FFTNetLayer(channels=16, modes=32)
+        layer = FFTNetLayer(channels=16, n_modes=32)
         out = layer(x)
         assert out.shape == x.shape
         assert torch.isfinite(out).all()

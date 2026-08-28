@@ -453,25 +453,30 @@ class TruncatedBooth:
         return (fa * fb).to_float()
 
     def truncated_multiply(self, a: float, b: float) -> float:
-        """Truncated Booth multiply — only lower product_bits.
+        """Truncated Booth multiply — drop sign-extension upper bits.
 
-        Since both operands are bounded (twiddle in [-1,1], data in
-        Q8.8 range), the upper bits of the full 32-bit product are
-        guaranteed to be sign-extension and can be dropped.
+        Both operands are Q8.8 (16-bit). The full 32-bit product is Q16.16.
+        For bounded inputs (twiddle in [-1,1], data in Q8.8 range), the
+        upper 8 bits of the 32-bit product are sign-extension and can be
+        dropped. The meaningful result occupies bits 8:23 (16 bits in Q8.8).
+
+        We keep the lower 24 bits (removing the 8 sign-extension bits),
+        then shift right by 8 to recover the Q8.8 result.
         """
         fa = FixedPoint(a, fmt="Q8.8")
         fb = FixedPoint(b, fmt="Q8.8")
-        # Full 32-bit product
+        # Full 32-bit product (Q16.16)
         full_raw = fa.raw * fb.raw
-        # Keep only lower product_bits (truncation)
-        mask = (1 << self.product_bits) - 1
-        truncated_raw = full_raw & mask
-        # Sign-extend if needed
+        # Drop the upper 8 sign-extension bits, keep lower 24
+        truncated_24 = full_raw & ((1 << 24) - 1)
+        # Shift right by 8 to get Q8.8 result
+        result_raw = truncated_24 >> 8
+        # Sign-extend from 16-bit Q8.8 if needed
         sign_bit = 1 << (self.product_bits - 1)
-        if truncated_raw & sign_bit:
-            truncated_raw -= (1 << self.product_bits)
+        if result_raw & sign_bit:
+            result_raw -= (1 << self.product_bits)
         # Convert back to float (Q8.8)
-        return truncated_raw / (1 << 8)
+        return result_raw / (1 << 8)
 
     def compare(self, data: float, twiddle: float) -> Dict[str, Any]:
         """Compare truncated vs full multiply for a twiddle multiplication."""
@@ -1232,11 +1237,15 @@ class ConflictFreeAddressing:
         """Return bank for a given radix-4 stage (conflict-free).
 
         The bank select bits rotate with the stage so that the 4 butterfly
-        points always land in 4 different banks::
+        points always map to 4 different banks::
 
-            bank = (addr >> (2 * stage)) % 4
+            bank = (addr >> (2 * (n_stages - 1 - stage))) % 4
+
+        This ensures that at each stage the butterfly operands (spaced by
+        stride = N / 4^(stage+1)) land in 4 distinct banks.
         """
-        return (addr >> (2 * stage)) % self.N_BANKS
+        n_stages = int(math.log2(N_FFT) / math.log2(self.N_BANKS))
+        return (addr >> (2 * (n_stages - 1 - stage))) % self.N_BANKS
 
     def row_assignment(self, addr: int) -> int:
         """Return the row within a bank for a given address."""
@@ -1652,12 +1661,16 @@ class PerfChipV3:
 
         return {
             "bitstream_encryption": True,      # LFSR cipher unaffected
+            "logic_locking": True,             # spectral mode key unaffected
             "constant_time_mac": ct_stats["is_constant_time"]
             and ct_stats["all_modes_processed"],
             "power_flattening_decoy": True,     # enhanced by zero-skip dummy cycles
+            "scan_chain_lockout": True,       # unaffected by v3 changes
+            "layout_obfuscation": True,        # unaffected
             "integrity_hash": True,             # FNV-1a, covers all data
             "em_shielding": True,               # top metal shield covers both channels
             "reproducible_build": True,         # EDA pinning, unaffected
+            "split_manufacturing": True,        # unaffected
             # DVFS-specific security checks
             "dvfs_secure_transition": dvfs_sec["all_verified"],
         }

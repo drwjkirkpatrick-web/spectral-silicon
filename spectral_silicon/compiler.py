@@ -330,11 +330,17 @@ def _extract_model_meta(model: Any) -> Dict[str, int]:
             v = getattr(model, n, None)
             if v is None:
                 continue
+            # Skip nn.Module / non-numeric attributes (e.g. ModuleDict keys)
+            if hasattr(v, "parameters") or hasattr(v, "forward"):
+                continue
             try:
                 return int(v)
             except (TypeError, ValueError):
                 # Could be a 1-D tensor / array.
-                return int(_to_numpy(v))
+                try:
+                    return int(_to_numpy(v))
+                except (TypeError, ValueError):
+                    continue
         return default
 
     d_model = _get("d_model", "hidden_size", "dim", "embed_dim")
@@ -344,15 +350,22 @@ def _extract_model_meta(model: Any) -> Dict[str, int]:
 
     # Fall back to inferring from the first spectral layer if the model did
     # not carry the attributes.
-    if d_model == 0:
-        layers = _iter_spectral_layers(model)
-        if layers:
-            w = _extract_complex_weights(layers[0][2], layers[0][1])
-            # Heuristic: weights are block-diagonal (n_blocks, block_size) →
-            # d_model ≈ n_blocks * block_size.
-            raw = _to_numpy(getattr(layers[0][2], "complex_weights", np.array([])))
+    layers = _iter_spectral_layers(model)
+    if d_model == 0 and layers:
+        mod = layers[0][2]
+        # Try the spectral layer's own attributes first
+        d_model = int(getattr(mod, "channels", 0) or getattr(mod, "d_model", 0) or 0)
+        if d_model == 0:
+            w = _extract_complex_weights(mod, layers[0][1])
+            raw = _to_numpy(getattr(mod, "complex_weights", np.array([])))
             if raw.size:
                 d_model = int(raw.shape[-1]) if raw.ndim >= 1 else 0
+    if n_modes == 0 and layers:
+        mod = layers[0][2]
+        n_modes = int(getattr(mod, "n_modes", 0) or getattr(mod, "num_modes", 0) or 0)
+    if block_size == 0 and layers:
+        mod = layers[0][2]
+        block_size = int(getattr(mod, "block_size", 0) or 0)
     return {
         "d_model": d_model,
         "seq_len": seq_len,
@@ -517,14 +530,14 @@ class SpectralChipCompiler:
             f.write(blob)
 
     @staticmethod
-    def load_blob(path: str) -> Dict[str, Any]:
+    def load_blob(path_or_bytes) -> Dict[str, Any]:
         """
-        Read and parse a blob file written by :meth:`save_blob`.
+        Read and parse a blob from either a file path or raw bytes.
 
         Parameters
         ----------
-        path : str
-            Path to a ``chip_blob.bin`` file.
+        path_or_bytes : str or bytes
+            Path to a ``chip_blob.bin`` file, or the raw blob bytes.
 
         Returns
         -------
@@ -534,8 +547,11 @@ class SpectralChipCompiler:
             ``block_size``, and ``layers`` (each layer is itself a dict with
             quantized weights + scale factors).
         """
-        with open(path, "rb") as f:
-            raw = f.read()
+        if isinstance(path_or_bytes, (bytes, bytearray)):
+            raw = bytes(path_or_bytes)
+        else:
+            with open(path_or_bytes, "rb") as f:
+                raw = f.read()
         return SpectralChipCompiler._parse_blob(raw).to_dict()
 
     @staticmethod
