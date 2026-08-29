@@ -1,7 +1,7 @@
 {
     "DESIGN_NAME": "spectral_mixer",
     "PDK": "sky130A",
-    "CLOCK_PERIOD": "20",
+    "CLOCK_PERIOD": "8.33",
     "CLOCK_PORT": "clk",
     "CLOCK_NET": "clk",
     "FP_CORE_AREA": "600 600 1000 1000",
@@ -20,10 +20,18 @@
         "rtl/spectral_multiply.v",
         "rtl/modrelu.v",
         "rtl/spectral_mixer.v",
-        "rtl/wishbone_if.v"
+        "rtl/wishbone_b4.v",
+        "rtl/bus_arbiter.v",
+        "rtl/timing_margin_buffer.v"
     ],
     "VIAS": "sky130_fd_sc_hd__viacut_12x12_0",
     "MAX_FANOUT_CONSTRAINT": "10",
     "PL_RESIZER_DESIGN_OPTIMIZATIONS": "1",
-    "GLB_OPTIMIZE_MIRRORING": "1"
+    "GLB_OPTIMIZE_MIRRORING": "1",
+    "SYNTH_TIMING_UNCONSTRAINED": "0",
+    "SYNTH_MAX_FANOUT": "10",
+    "PL_RESIZER_HOLD_SLACK_MARGIN": "0.2",
+    "GLB_RESIZER_HOLD_SLACK_MARGIN": "0.2",
+    "SYNTH_CLOCK_DRIVING_CELL": "sky130_fd_sc_hd__clkbuf_4",
+    "SYNTH_CLK_PERIOD": "8.33"
 }

@@ -10,7 +10,7 @@ tags:
   - spectral-mixing
 language: "Verilog"
 hdL_type: "Verilog"
-clock_hz: 50_000_000
+clock_hz: 120_000_000
 tile_size: 1
 wiki: ""
 github: ""
