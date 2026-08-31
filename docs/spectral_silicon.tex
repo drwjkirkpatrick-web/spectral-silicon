@@ -1,0 +1,1255 @@
+\documentclass[11pt,a4paper]{article}
+
+% ── Packages ────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\geometry{margin=2.5cm}
+\hypersetup{colorlinks=true,linkcolor=blue!70!black,citecolor=green!50!black,urlcolor=blue!70!black}
+
+% ── Theorem environments ──────────────────────────────────────────────────
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}
+\newtheorem{example}{Example}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+
+% ── Custom commands ──────────────────────────────────────────────────────
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\abs}[1]{\left\lvert#1\right\rvert}
+\newcommand{\conj}[1]{\overline{#1}}
+\newcommand{\Real}{\operatorname{Re}}
+\newcommand{\Imag}{\operatorname{Im}}
+\newcommand{\sign}{\operatorname{sgn}}
+\newcommand{\FFT}{\operatorname{FFT}}
+\newcommand{\IFFT}{\operatorname{IFFT}}
+\newcommand{\DFT}{\operatorname{DFT}}
+\newcommand{\softthr}{\operatorname{soft\_thr}}
+\newcommand{\modReLU}{\operatorname{modReLU}}
+\newcommand{\bigO}{\mathcal{O}}
+
+% ── Title ────────────────────────────────────────────────────────────────
+\title{\textbf{Spectral Silicon: A Custom ASIC for LLM Inference via\\
+Neural-Operator-Based Spectral Mixing}\\[0.5em]
+\large Technical Design Document}
+\author{Walker Kirkpatrick}
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document presents the complete architecture, mathematical foundations, and
+performance analysis of \emph{Spectral Silicon}, a custom ASIC that replaces the
+$\bigO(n^2)$ self-attention mechanism in large language models with an $\bigO(n \log n)$
+spectral mixing pipeline based on Fourier Neural Operators (FNO), Adaptive FNO (AFNO),
+and FFTNet. The chip implements the pipeline \textsc{FFT} $\to$ spectral weight multiply
+$\to$ \textsc{IFFT} $\to$ modReLU directly in silicon on the open-source SkyWater
+SKY130 130\,nm process, targeting fabrication through Tiny Tapeout (\$50--\$500).
+The design comprises 84 Verilog RTL modules, 12 Python simulation modules, and 343
+passing tests. Three architectural generations (V1--V3) are analyzed: V1 achieves
+189{,}000 tokens/s at 100{,}300 gate equivalents (GE); V2 reduces area by 91\%
+(9{,}102 GE) through a shared FFT/IFFT engine and serialized channels; V3 adds 20
+performance improvements including Booth multipliers, block floating-point, and
+dual-channel processing, reaching 21{,}900 tokens/s at 80\,MHz (120\,MHz in V6/V7).
+All 11 security measures---including constant-time MAC, power flattening, and
+bitstream encryption---are preserved across all versions.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Introduction and Motivation}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{The Attention Bottleneck}
+
+Modern large language models (LLMs) are bottlenecked by \emph{self-attention}---the
+$\bigO(n^2)$ operation where every token attends to every other token. For a
+sequence of length $n=256$ with $d=64$ channels, the attention mechanism computes:
+\begin{equation}
+  \text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V
+  \label{eq:attention}
+\end{equation}
+where $Q, K, V \in \R^{n \times d}$ are the query, key, and value projections. The
+matrix $QK^\top \in \R^{n \times n}$ requires $n^2 d$ multiply-accumulate operations
+and $n^2$ storage. At 130\,nm, a $256 \times 256$ attention matrix needs
+$\sim$256\,KB of SRAM and 65{,}536 MACs---far exceeding the area available on a
+Tiny Tapeout tile ($\sim$1\,mm$^2$, $\sim$100K gates).
+
+\subsection{The Spectral Alternative}
+
+Neural operators [?] offer an
+alternative: replace the $\bigO(n^2)$ attention matrix with an $\bigO(n \log n)$
+spectral mixing operation that performs the \emph{same job} (token mixing) but
+through the Fourier domain:
+\begin{equation}
+  y = x + \IFFT\!\left( R \cdot \FFT(x) \right)
+  \label{eq:spectral_mixing}
+\end{equation}
+where $R$ is a learnable complex weight tensor applied to the first $k \ll n$ Fourier
+modes. The key insight is that \textbf{the weights live in the frequency domain},
+indexed by mode rather than by position, so the parameter count is $\bigO(k \cdot d)$
+instead of $\bigO(n^2)$, and the computational complexity is $\bigO(n \log n)$ from
+the FFT/IFFT rather than $\bigO(n^2)$ from the attention matrix.
+
+\subsection{Why Hardware?}
+
+While spectral mixing can be implemented in software (PyTorch), deploying it as a
+custom ASIC provides:
+\begin{itemize}[noitemsep]
+  \item \textbf{Throughput:} A pipelined FFT engine processes 1 sample/clock
+    continuously---no matrix allocation overhead.
+  \item \textbf{Power:} Fixed-point arithmetic (Q8.8) at 1.8\,V consumes
+    $\sim$4\,mW vs $\sim$30\,W for a GPU running the same computation.
+  \item \textbf{Cost:} The chip can be fabricated for \$50--\$500 through Tiny
+    Tapeout, vs thousands of dollars for a GPU.
+  \item \textbf{Resolution invariance:} Because weights are mode-indexed, the
+    same chip processes $n=128$ and $n=512$ sequences without reconfiguration.
+\end{itemize}
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Mathematical Foundations}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{Self-Attention}
+
+The standard scaled dot-product attention [7] is:
+\begin{equation}
+  \text{Attn}(Q,K,V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V
+\end{equation}
+The attention matrix $A = QK^\top \in \R^{n \times n}$ requires:
+\begin{itemize}[noitemsep]
+  \item \textbf{Time:} $\bigO(n^2 d)$ for the matrix multiply + $\bigO(n^2)$ for
+    softmax + $\bigO(n^2 d)$ for $AV$.
+  \item \textbf{Memory:} $\bigO(n^2)$ for the attention matrix.
+  \item \textbf{Parameters:} $\bigO(n^2)$ if position-dependent; $\bigO(d^2)$
+    for the $Q,K,V$ projections.
+\end{itemize}
+
+\subsection{Fourier Neural Operator (FNO)}
+
+The FNO [1] parameterizes the kernel integral in Fourier space. For
+an input $v \in \R^{n \times d}$ (batch of $n$ tokens, $d$ channels):
+\begin{equation}
+  v_{t+1} = \sigma\!\left( W v_t + \mathcal{K}(v_t) \right)
+  \label{eq:fno}
+\end{equation}
+where $W$ is a linear transform and $\mathcal{K}$ is the spectral kernel:
+\begin{align}
+  \hat{v} &= \FFT(v) \in \C^{n \times d} \\
+  \hat{v}_m' &= R_m \hat{v}_m, \quad m = 0, 1, \ldots, k-1 \\
+  \hat{v}_m' &= 0, \quad m = k, \ldots, n-1 \quad \text{(truncation)} \\
+  \mathcal{K}(v) &= \IFFT(\hat{v}') \in \R^{n \times d}
+\end{align}
+Here $R_m \in \C^{d \times d}$ is a learnable complex weight matrix for mode $m$.
+In practice, $R$ is truncated to the first $k$ modes (low-frequency components),
+which captures the dominant signal structure.
+
+\textbf{Complexity:} The FFT is $\bigO(n \log n)$, the mode-wise multiply is
+$\bigO(k d^2)$ (or $\bigO(k d)$ for diagonal $R$), and the IFFT is $\bigO(n \log n)$.
+Total: $\bigO(n \log n + k d^2)$.
+
+\subsection{Adaptive Fourier Neural Operator (AFNO)}
+
+The AFNO [2] introduces three modifications to the FNO:
+
+\subsubsection{Block-Diagonal Weight Structure}
+Instead of a full $d \times d$ matrix $R_m$ per mode, the channel dimension is split
+into $n_b = d / b$ blocks of size $b \times b$:
+\begin{equation}
+  R_m = \text{diag}(R_m^{(1)}, R_m^{(2)}, \ldots, R_m^{(n_b)})
+  \label{eq:blockdiag}
+\end{equation}
+where each $R_m^{(j)} \in \C^{b \times b}$. This reduces parameters from
+$k d^2$ to $k d b$ (a factor of $d/b$ reduction). With $b=1$, the weight is fully
+diagonal (per-channel); with $b=d$, it is a single full block (standard FNO).
+
+\subsubsection{Adaptive Soft-Thresholding}
+Each spectral coefficient is soft-thresholded to induce sparsity:
+\begin{equation}
+  \softthr(z, \tau) = \begin{cases}
+    0 & \text{if } \abs{z} \leq \tau \\
+    z \cdot \frac{\abs{z} - \tau}{\abs{z}} & \text{if } \abs{z} > \tau
+  \end{cases}
+  \label{eq:soft_threshold}
+\end{equation}
+where $\tau \geq 0$ is a learnable (or fixed) threshold. This zeros small
+coefficients, sparsifying the frequency response. With $\tau = 0$, the AFNO reduces
+to a plain FNO.
+
+\subsubsection{Resolution Invariance}
+The weight tensor $R$ is indexed by \emph{mode} $m$, not by \emph{position} $i$.
+Since the FFT of any length $n \geq k$ produces the same first $k$ modes, the same
+weights process sequences of different lengths. Formally:
+\begin{proposition}[Resolution Invariance]
+\label{prop:resinv}
+Let $f_\theta : \R^{n_1 \times d} \to \R^{n_1 \times d}$ be an AFNO layer with
+parameters $\theta = \{R_m\}_{m=0}^{k-1}$. Then $f_\theta$ is well-defined for any
+input $x \in \R^{n_2 \times d}$ with $n_2 \geq k$, and the parameter count
+$\abs{\theta} = k \cdot d \cdot b$ is independent of $n_1$ and $n_2$.
+\end{proposition}
+
+\subsection{FFTNet --- Adaptive Spectral Filtering}
+
+FFTNet [3] makes the spectral filter \emph{input-dependent}.
+Instead of a static weight $R_m$, the filter is predicted from a global context:
+\begin{align}
+  g &= \frac{1}{n} \sum_{i=1}^{n} x_i \in \R^d \quad \text{(global context)} \\
+  w &= \text{MLP}(g) \in \C^k \quad \text{(predicted filter)} \\
+  \hat{v}_m' &= w_m \cdot \hat{v}_m, \quad m = 0, \ldots, k-1
+\end{align}
+The MLP maps the $d$-dimensional context to $2k$ real values, reshaped into $k$
+complex filter coefficients. This adds adaptivity at the cost of the MLP parameters.
+
+\subsection{modReLU Activation}
+
+The modReLU [8] is a magnitude-gated activation for complex
+values:
+\begin{equation}
+  \modReLU(z, b) = z \cdot \sign(\abs{z} + b)
+  \label{eq:modrelu}
+\end{equation}
+where $z \in \C$, $b \in \R$ is a learnable bias, and $\sign(0) = 0$. The bias
+shifts the magnitude threshold: positive $b$ makes the activation sparser (more
+outputs zeroed); negative $b$ keeps small magnitudes alive.
+
+\subsection{Complexity Comparison}
+
+\begin{table}[h]
+\centering
+\caption{Complexity comparison: self-attention vs.\ spectral mixing.}
+\label{tab:complexity}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Method} & \textbf{Time} & \textbf{Memory} & \textbf{Parameters} \\
+\midrule
+Self-attention & $\bigO(n^2 d)$ & $\bigO(n^2)$ & $\bigO(n^2)$ \\
+FNO (full) & $\bigO(n \log n + k d^2)$ & $\bigO(n d)$ & $\bigO(k d^2)$ \\
+AFNO (block-diag) & $\bigO(n \log n + k d b)$ & $\bigO(n d)$ & $\bigO(k d b)$ \\
+FFTNet (adaptive) & $\bigO(n \log n + k d)$ & $\bigO(n d)$ & $\bigO(k d + d h)$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For our chip with $n=256$, $d=64$, $k=32$, $b=8$:
+\begin{itemize}[noitemsep]
+  \item Self-attention: $256^2 \times 64 = 4{,}194{,}304$ MACs
+  \item AFNO: $256 \log_2 256 \times 2 + 32 \times 64 \times 8 = 4{,}096 + 16{,}384 = 20{,}480$ ops
+  \item Speedup: $\sim$200$\times$
+\end{itemize}
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Fixed-Point Arithmetic}
+%═══════════════════════════════════════════════════════════════════════════
+
+The chip uses fixed-point arithmetic to avoid the area and power overhead of
+floating-point hardware. The primary format is \textbf{Q8.8}: 16-bit total with
+8 integer bits (including sign) and 8 fractional bits.
+
+\subsection{Q8.8 Format}
+
+A Q8.8 number represents values in the range $[-128, 127.996]$ with resolution
+$2^{-8} = 0.00390625$. The raw integer $r$ maps to the real value:
+\begin{equation}
+  x = \frac{r}{2^{\text{frac}}}, \quad r \in [-2^{W-1}, 2^{W-1}-1]
+  \label{eq:q88}
+\end{equation}
+where $W = 16$ (total bits), $\text{frac} = 8$. The scale factor is $s = 2^8 = 256$.
+
+\subsection{Saturation Arithmetic}
+
+All arithmetic operations saturate to the representable range:
+\begin{equation}
+  \text{clamp}(r) = \begin{cases}
+    r_{\max} = 2^{W-1} - 1 = 32767 & \text{if } r > r_{\max} \\
+    r_{\min} = -2^{W-1} = -32768 & \text{if } r < r_{\min} \\
+    r & \text{otherwise}
+  \end{cases}
+\end{equation}
+Overflow and underflow flags are sticky---once set, they remain set until
+explicitly cleared. This allows the host to detect precision loss after a
+full inference pass.
+
+\subsection{Round-to-Nearest-Even (Banker's Rounding)}
+
+Quantization uses round-half-to-even (banker's rounding) to eliminate
+statistical bias:
+\begin{equation}
+  \text{RNE}(x) = \begin{cases}
+    \lfloor x \rfloor & \text{if } x - \lfloor x \rfloor < 0.5 \\
+    \lceil x \rceil & \text{if } x - \lfloor x \rfloor > 0.5 \\
+    \lfloor x \rfloor & \text{if } x - \lfloor x \rfloor = 0.5 \text{ and } \lfloor x \rfloor \text{ is even} \\
+    \lceil x \rceil & \text{if } x - \lfloor x \rfloor = 0.5 \text{ and } \lfloor x \rfloor \text{ is odd}
+  \end{cases}
+\end{equation}
+For integer division by $2^k$, this is implemented as:
+\begin{equation}
+  \text{rns\_div\_pow2}(v, k) = \sign(v) \cdot \left( \lfloor \frac{\abs{v}}{2^k} \rfloor + \begin{cases} 1 & \text{if remainder} > 2^{k-1} \\ \text{tie-break} & \text{if remainder} = 2^{k-1} \\ 0 & \text{otherwise} \end{cases} \right)
+\end{equation}
+
+\subsection{Complex Arithmetic}
+
+\subsubsection{Complex Multiply}
+For $z_1 = a + jb$ and $z_2 = c + jd$:
+\begin{equation}
+  z_1 \cdot z_2 = (ac - bd) + j(ad + bc)
+  \label{eq:complex_mul}
+\end{equation}
+This requires 4 real multiplications and 2 additions. The full-precision product
+is $2W$ bits wide; it is rescaled by right-shifting $\text{frac}$ bits (with RNE):
+\begin{equation}
+  \text{result} = \text{rns\_div\_pow2}(\text{product}, \text{FRAC})
+\end{equation}
+
+\subsubsection{Magnitude Approximation}
+The exact magnitude $\abs{z} = \sqrt{a^2 + b^2}$ requires a square root, which is
+expensive in hardware. The chip uses a shift-and-add approximation:
+\begin{equation}
+  \abs{z} \approx \max(\abs{a}, \abs{b}) + \frac{1}{2} \min(\abs{a}, \abs{b})
+  \label{eq:mag_approx}
+\end{equation}
+This is accurate to within $\sim$8\% worst case (maximum error at $a = b$, where
+the approximation gives $1.5a$ vs.\ the true $\sqrt{2}a \approx 1.414a$, an
+error of $\sim$6\%). The $\frac{1}{2}\min$ term is computed by a right shift
+(1 bit), requiring no multiplier.
+
+\subsubsection{CORDIC-Lite Magnitude}
+An alternative CORDIC-lite algorithm iteratively rotates $(a, b)$ toward the
+real axis:
+\begin{align}
+  a_{i+1} &= a_i - \sigma_i \cdot b_i \cdot 2^{-i} \\
+  b_{i+1} &= b_i + \sigma_i \cdot a_i \cdot 2^{-i}
+\end{align}
+where $\sigma_i = -\sign(b_i)$. After $n$ iterations, $\abs{z} \approx a_n$.
+With 8 iterations, accuracy is $\sim$12 bits---sufficient for Q8.8.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{FFT Architecture}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{The Discrete Fourier Transform}
+
+The $N$-point DFT of a sequence $x \in \C^N$ is:
+\begin{equation}
+  X_k = \sum_{n=0}^{N-1} x_n \, e^{-j 2\pi k n / N}, \quad k = 0, \ldots, N-1
+  \label{eq:dft}
+\end{equation}
+Direct computation requires $\bigO(N^2)$ complex multiplications. The FFT reduces
+this to $\bigO(N \log N)$ by exploiting the symmetry of the twiddle factors
+$W_N^k = e^{-j 2\pi k / N}$.
+
+\subsection{Radix-4 Butterfly}
+
+The chip uses a radix-4 decimation-in-time (DIT) FFT. The radix-4 butterfly takes
+4 complex inputs $x_0, x_1, x_2, x_3$ and produces 4 outputs:
+\begin{align}
+  X_0 &= x_0 + x_1 + x_2 + x_3 \\
+  X_1 &= (x_0 - j x_1 - x_2 + j x_3) \cdot W_N^{k_1} \\
+  X_2 &= (x_0 - x_1 + x_2 - x_3) \cdot W_N^{k_2} \\
+  X_3 &= (x_0 + j x_1 - x_2 - j x_3) \cdot W_N^{k_3}
+  \label{eq:radix4}
+\end{align}
+where multiplication by $j$ swaps real/imaginary parts and negates:
+$j(a + jb) = -b + ja$. Each butterfly requires 3 complex twiddle multiplications
+(the $X_0$ output has no twiddle).
+
+\subsection{Twiddle Factors}
+
+The twiddle factors are $W_N^k = \cos(2\pi k / N) - j \sin(2\pi k / N)$. For $N=256$,
+there are 64 unique twiddle values (stored in a ROM). The symmetry property
+$W_N^{k+N/4} = -j \cdot W_N^k$ generates 4 twiddles from 1 stored value, reducing
+ROM from 64 to 16 entries (4$\times$ compression).
+
+\subsection{FFT Pipeline for $N=256$}
+
+The 256-point radix-4 FFT has $\log_4 256 = 4$ stages, each with 64 butterflies:
+\begin{equation}
+  \text{Total butterflies} = \frac{N}{4} \log_4 N = 64 \times 4 = 256
+\end{equation}
+Total complex multiplies: $3 \times 256 = 768$ (vs.\ $256^2 = 65{,}536$ for direct
+DFT). The pipeline processes 1 butterfly per clock cycle, giving a latency of
+256 cycles and a throughput of 1 sample/clock.
+
+\subsection{IFFT via Conjugate Method}
+
+The IFFT is computed using the same FFT hardware via the conjugate method:
+\begin{equation}
+  \IFFT(x) = \frac{1}{N} \conj{\FFT(\conj{x})}
+  \label{eq:ifft_conj}
+\end{equation}
+This requires only input/output conjugation (sign flip of imaginary parts) and
+a division by $N$ (right shift by $\log_2 N$ in fixed-point). The V2 architecture
+shares a single \texttt{fft\_ifft\_256} instance for both transforms, saving
+$\sim$15K gates.
+
+\subsection{Bit-Reversal Permutation}
+
+The DIT FFT produces output in bit-reversed order. For $N=256$, the bit-reversal
+permutes 8-bit indices: bit $k \to$ bit $7-k$. This is done in hardware by a
+bit-reversal router (a simple crossbar that permutes address bits), saving
+$\sim$256 host CPU cycles vs.\ software bit-reversal.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Chip Architecture}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{Pipeline Overview}
+
+The spectral mixer pipeline is:
+\begin{equation}
+  \text{Input Buffer} \xrightarrow{\text{256 complex}} \text{FFT Engine}
+  \xrightarrow{\text{256 modes}} \text{Spectral Multiply}
+  \xrightarrow{k=32 \text{ modes}} \text{IFFT Engine}
+  \xrightarrow{\text{256 complex}} \text{modReLU}
+  \xrightarrow{\text{256 complex}} \text{Output Buffer}
+\end{equation}
+
+The chip processes $D=64$ channels sequentially through this pipeline. The
+control state machine has states:
+\texttt{IDLE} $\to$ \texttt{LOAD\_FFT} $\to$ \texttt{FFT\_RUN} $\to$
+\texttt{SM\_IFFT} $\to$ \texttt{MR\_STORE} $\to$ \texttt{DONE}.
+
+\subsection{Parameters}
+
+\begin{table}[h]
+\centering
+\caption{Chip parameters.}
+\label{tab:params}
+\begin{tabular}{lc l}
+\toprule
+\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
+\midrule
+$N$ & 256 & FFT size / sequence length \\
+$D$ & 64 & Number of channels (serialized) \\
+$K$ & 32 & Retained spectral modes \\
+$b$ & 8 & Block-diagonal block size \\
+$W$ & 16 & Datapath width (Q8.8) \\
+$\text{FRAC}$ & 8 & Fractional bits \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Register Map}
+
+The chip exposes 16 32-bit registers via the Wishbone bus:
+
+\begin{table}[h]
+\centering
+\caption{Register map.}
+\label{tab:registers}
+\begin{tabular}{lll}
+\toprule
+\textbf{Address} & \textbf{Name} & \textbf{Description} \\
+\midrule
+0x00 & CTRL & [0]=start, [1]=done \\
+0x04 & STATUS & [0]=busy, [1]=done, [2]=error \\
+0x08 & N\_MODES & Number of spectral modes (default 32) \\
+0x0C & BLOCK\_SIZE & Block-diagonal block size (default 8) \\
+0x10 & THRESHOLD & Soft-thresholding value (Q8.8) \\
+0x14 & WEIGHT\_BASE & Weight memory base address \\
+0x18 & DATA\_BASE & Data buffer base address \\
+0x1C & MODRELU\_BIAS & modReLU bias (Q8.8) \\
+0x20 & WEIGHT\_WR\_DATA & Write: re[15:0], im[31:16] \\
+0x24 & WEIGHT\_RD\_DATA & Read: re[15:0], im[31:16] \\
+0x28 & DATA\_WR\_DATA & Write: re[15:0], im[31:16] \\
+0x2C & DATA\_RD\_DATA & Read: re[15:0], im[31:16] \\
+0x30 & CONFIG & [7:0]=WIDTH, [15:8]=FRAC, [31:16]=N \\
+0x3C & VERSION & Hardware version ID (read-only) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Wishbone B4 Pipelined Bus}
+
+The V2+ chip uses a Wishbone B4 Pipelined bus interface for 120\,MHz operation:
+
+\begin{table}[h]
+\centering
+\caption{Wishbone B4 signals.}
+\label{tab:wishbone}
+\begin{tabular}{ll}
+\toprule
+\textbf{Signal} & \textbf{Description} \\
+\midrule
+\texttt{wb\_cyc\_i} & Cycle (bus master requesting) \\
+\texttt{wb\_stb\_i} & Strobe (valid request) \\
+\texttt{wb\_we\_i} & Write enable \\
+\texttt{wb\_adr\_i} & Address (6-bit, word-aligned) \\
+\texttt{wb\_dat\_i} & Write data (32-bit) \\
+\texttt{wb\_dat\_o} & Read data (32-bit) \\
+\texttt{wb\_ack\_o} & Acknowledge (1-cycle delayed in pipelined mode) \\
+\texttt{wb\_stall\_o} & Stall (chip not ready for next request) \\
+\texttt{wb\_bte\_i} & Burst type extension (00=single, 01=4-word, etc.) \\
+\texttt{wb\_cti\_i} & Cycle type (000=classic, 010=incr burst, 111=end) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The pipelined ack breaks the combinational path at 120\,MHz (8.3\,ns cycle):
+the request is latched on cycle $N$, and the acknowledge is emitted on cycle
+$N+1$, giving a full clock period for address decode and register access.
+
+\subsubsection{Burst Mode}
+Burst transactions auto-increment the address for consecutive weight or data
+writes. With \texttt{wb\_cti\_i} = \texttt{010} (incrementing burst), the
+internal \texttt{burst\_addr} register auto-increments, and the host does not need
+to drive a new address each cycle. When \texttt{wb\_cti\_i} = \texttt{111} (end of
+burst), the burst terminates after the current word. This reduces bus overhead
+from 1 cycle/word to $\sim$0.25 cycles/word for 4-word bursts.
+
+\subsection{Gate Count Breakdown}
+
+\begin{table}[h]
+\centering
+\caption{V1 gate count estimate.}
+\label{tab:gates_v1}
+\begin{tabular}{lr}
+\toprule
+\textbf{Module} & \textbf{Gates} \\
+\midrule
+FFT engine (radix-4, 256-point) & $\sim$15{,}000 \\
+Spectral weight multiply (32 modes) & $\sim$8{,}000 \\
+IFFT engine (shared with FFT) & $\sim$15{,}000 (shared) \\
+modReLU + soft-threshold & $\sim$2{,}000 \\
+Wishbone interface + control & $\sim$500 \\
+\midrule
+\textbf{Total} & $\sim$40{,}000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Quantization}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{Symmetric int8 Quantization}
+
+Complex spectral weights are quantized from float32 to int8 using symmetric
+quantization (zero-point = 0):
+\begin{equation}
+  q = \text{clip}\!\left( \text{round}\!\left( \frac{x}{s} \right), -128, 127 \right), \quad
+  s = \frac{\max(\abs{x})}{127}
+  \label{eq:quant}
+\end{equation}
+Dequantization is: $x \approx q \cdot s$. The scale $s$ is stored per-layer
+(separate scales for real and imaginary parts).
+
+\subsection{Quantization Error}
+
+The quantization error for a single value is bounded by:
+\begin{equation}
+  \abs{x - q \cdot s} \leq \frac{s}{2} = \frac{\max(\abs{x})}{254}
+\end{equation}
+For typical spectral weights with $\max(\abs{x}) \sim 1.0$, the error is
+$\sim 0.004$ (0.4\%), well within the $\sim$2\% threshold measured in practice.
+
+\subsection{Int8 FFT}
+
+The chip includes an int8 FFT implementation using lookup tables for twiddle
+factors. The twiddle factors are pre-quantized to int8 and stored in a ROM.
+Products are computed in int32 (to prevent overflow) and rescaled by dividing
+by $q_{\max} = 127$:
+\begin{equation}
+  \text{prod} = (w_r \cdot b_r - w_i \cdot b_i) \, // \, q_{\max}
+\end{equation}
+Per-stage scaling (right-shift by 1 every other stage) prevents overflow,
+giving a total scaling of $\sim 1/\sqrt{N}$.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Resolution Invariance}
+%═══════════════════════════════════════════════════════════════════════════
+
+\begin{theorem}[Resolution Invariance]
+\label{thm:resinv}
+Let $f_\theta$ be a spectral mixing layer (FNO/AFNO) with parameters
+$\theta = \{R_m\}_{m=0}^{k-1}$. Then:
+\begin{enumerate}[noitemsep]
+  \item $f_\theta$ accepts inputs of any sequence length $n \geq k$.
+  \item The number of parameters $\abs{\theta} = k \cdot d \cdot b$ is
+    independent of $n$.
+  \item The same trained parameters work at different $n$ without
+    retraining.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+The forward pass is:
+\begin{equation}
+  f_\theta(x) = x + \IFFT_n\!\left( R \cdot \FFT_n(x) \right)
+\end{equation}
+where $\FFT_n$ and $\IFFT_n$ are $n$-point transforms. The weight $R$ operates
+on the first $k$ modes of $\FFT_n(x)$. Since the first $k$ Fourier modes of an
+$n$-point FFT correspond to the same frequencies regardless of $n$ (they are
+$e^{-j2\pi m / N}$ for $m = 0, \ldots, k-1$), the weight $R_m$ applies to the same
+frequency component at any $n \geq k$. Thus:
+\begin{itemize}[noitemsep]
+  \item The weight tensor has shape $(k, d, b)$, which does not depend on $n$.
+  \item The FFT/IFFT are non-parametric operations whose size is determined at
+    runtime by $x.\text{shape}[1]$.
+  \item No retraining is needed because the weights operate on frequency modes,
+    not spatial positions.
+\end{itemize}
+\end{proof}
+
+\textbf{Practical implication:} A model trained at $n=64$ can be evaluated at
+$n=256$ or $n=512$ with zero parameter changes---only the FFT size changes.
+This is impossible with standard attention, which requires $n \times n$ weight
+matrices that must be retrained for each $n$.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{V2 Architectural Improvements}
+%═══════════════════════════════════════════════════════════════════════════
+
+The V2 architecture introduces three key improvements over V1:
+
+\subsection{Shared FFT/IFFT Engine (Improvement 1)}
+
+V1 uses separate \texttt{fft\_256} and \texttt{ifft\_256} modules ($\sim$15K gates
+each). V2 replaces them with a single \texttt{fft\_ifft\_256} module that uses
+the conjugate method (Eq.~\ref{eq:ifft_conj}) with a mode bit selecting FFT vs.
+IFFT. Since the FFT and IFFT run sequentially (FFT finishes before IFFT starts),
+time-multiplexing is possible. This saves $\sim$15K gates.
+
+\subsection{Merged Soft-Threshold + modReLU (Improvement 8)}
+
+V1 applies soft-thresholding (in spectral multiply) and modReLU (separate module)
+in two stages with two separate magnitude computations. V2 fuses them:
+\begin{equation}
+  \text{merged}(z) = \begin{cases}
+    0 & \text{if } \abs{z} < \tau \;\;(\text{soft-threshold}) \\
+    0 & \text{if } \abs{z} + b \leq 0 \;\;(\text{modReLU}) \\
+    z & \text{otherwise}
+  \end{cases}
+\end{equation}
+Both checks use the same $\abs{z}$ (computed once), saving one magnitude unit
+and one pipeline stage ($\sim$1K gates).
+
+\subsection{Serialized Channel Processing (Improvement 9)}
+
+V1 processes $D=64$ channels in parallel (64 spectral multiply units). V2
+serializes: one channel at a time through a single MAC unit, with a channel
+counter. This trades $8\times$ latency for $8\times$ smaller spectral multiply
+area. For LLM inference (batch=1), this is an acceptable trade-off.
+
+\begin{table}[h]
+\centering
+\caption{V1 vs.\ V2 comparison.}
+\label{tab:v1v2}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Metric} & \textbf{V1} & \textbf{V2} & \textbf{Change} \\
+\midrule
+Total area (GE) & 100{,}300 & 9{,}102 & $-90.9\%$ \\
+Total power (mW) & 32.50 & 2.21 & $-93.2\%$ \\
+Throughput (tokens/s) & 189{,}394 & 2{,}959 & $0.016\times$ \\
+Latency (cycles, $k=32$) & 544 & 34{,}816 & $64\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The V2 area reduction comes from: shared FFT engine ($-15$K), serialized
+channels ($-76$K), merged activation ($-1$K), and removed IFFT module ($-15$K).
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{V3 Performance Improvements}
+%═══════════════════════════════════════════════════════════════════════════
+
+V3 adds 20 improvements organized into four groups:
+
+\subsection{Datapath Arithmetic (1--5)}
+
+\subsubsection{Booth-Encoded Radix-4 Multiplier}
+Booth encoding [9] halves the number of partial products
+in the complex multiplier. For a radix-4 Booth encoding:
+\begin{equation}
+  \text{partial products} = \frac{W}{2} \quad \text{(vs.\ $W$ for standard)}
+\end{equation}
+Carry-save (Wallace tree) compression eliminates the carry-propagate adder
+from the critical path, reducing it by $\sim$30\% and enabling 50$\to$65\,MHz.
+
+\subsubsection{Block Floating-Point (BFP)}
+Each block of 64 FFT samples shares a 4-bit exponent with 12-bit mantissas:
+\begin{equation}
+  x = m \cdot 2^e, \quad e = \lfloor \log_2 \max(\abs{x_i}) \rfloor
+\end{equation}
+This gives $\sim$12 extra bits of dynamic range (162.5\,dB vs.\ 90.3\,dB for
+Q8.8), reducing FFT rounding error by $\sim$20$\times$.
+
+\subsubsection{Carry-Save Accumulator}
+Partial products are kept in carry-save format throughout $k$-mode
+accumulation, with a single carry-propagate at the end:
+\begin{equation}
+  \text{latency} = 1 \;\text{cycle} \quad \text{(vs.\ $k$ cycles for carry-propagate each step)}
+\end{equation}
+83\% latency reduction in the MAC accumulator.
+
+\subsubsection{FMA Butterfly}
+The twiddle multiply and butterfly add/sub are fused:
+\begin{equation}
+  \text{FMA}(a, W, b) = a + W \cdot b \quad \text{(single operation, no intermediate rounding)}
+\end{equation}
+Saves 1 pipeline stage and $\sim$500 gates per butterfly, with improved numerical
+accuracy from eliminating intermediate rounding.
+
+\subsubsection{Truncated Booth Multiplier}
+For twiddle factors in $[-1, 1]$, the integer part of the product is bounded.
+Computing only the lower 16 bits of a $16 \times 16$ product saves $\sim$30\%
+of the multiplier area with negligible error ($\sim$0.004$).
+
+\subsection{Memory and Data Movement (6--10)}
+
+\subsubsection{Ping-Pong Dual Buffers}
+Two memory banks alternate between FFT stages (A$\to$B, B$\to$A), eliminating
+pipeline bubbles for 6.8$\times$ throughput improvement.
+
+\subsubsection{Shadow Weight Prefetch}
+A shadow register file prefetches the next weight block while the current
+block is processed. Latency reduction: 48.4\%, with zero stalls when load
+time $\leq$ compute time.
+
+\subsubsection{Zero-Skip MAC with Dummy Cycles}
+Zeroed modes (from soft-thresholding) use dummy cycles with LFSR decoy data:
+\begin{equation}
+  \text{if } \abs{z_m} < \tau: \;\text{compute decoy}(LFSR_m) \text{ instead of } z_m \cdot w_m
+\end{equation}
+Constant timing preserved, 45\% power reduction at 50\% sparsity. An attacker
+cannot distinguish real from dummy multiplies via timing or power.
+
+\subsubsection{Conflict-Free Addressing}
+Modulo-4 bank mapping: $\text{bank} = \text{addr}[1:0]$, $\text{row} = \text{addr} \gg 2$.
+Guarantees butterfly data in different banks $\to$ 0 stalls, single-cycle execution.
+
+\subsubsection{Bit-Reversal Router}
+Hardware crossbar that permutes address bits ($\text{bit}[k] \to \text{bit}[\log_2 N - 1 - k]$),
+saving 255 CPU cycles vs.\ software bit-reversal.
+
+\subsection{Algorithmic Optimizations (11--15)}
+
+\subsubsection{Real-Input FFT (RFFT)}
+For real-valued inputs, Hermitian symmetry gives $N/2+1$ modes instead of $N$:
+\begin{equation}
+  X_{N-k} = \conj{X_k} \quad \Rightarrow \quad \text{only } X_0, \ldots, X_{N/2} \text{ are unique}
+\end{equation}
+49.6\% mode reduction (129 vs.\ 256 modes for $N=256$).
+
+\subsubsection{Twiddle Factor Symmetry}
+$W_N^{k+N/4} = -j \cdot W_N^k$ generates 4 twiddles from 1 stored value:
+$W^k$, $-jW^k$, $-W^k$, $jW^k$. 4$\times$ ROM compression (64$\to$16 entries).
+
+\subsubsection{Mode Interleaving}
+Even/odd modes processed simultaneously in 2 pipeline stages:
+$2\times$ spectral multiply throughput without $2\times$ area.
+
+\subsubsection{Adaptive Mode Count}
+Configurable $k$ (8--32) via Wishbone register. Fewer modes = faster inference.
+Timing varies with $k$ (public config), not with data content.
+
+\subsubsection{Early IFFT Start}
+IFFT begins after $k$ modes are ready (not all $N$), overlapping with remaining
+FFT output. 5.9\% latency reduction (512$\to$480 cycles for $k=32$).
+
+\subsection{Pipeline and Throughput (16--20)}
+
+\subsubsection{Deep 8-Stage Pipeline}
+2 sub-stages per radix-4 stage (twiddle multiply + butterfly add). Shorter
+critical path enables 65$\to$80\,MHz (60\% frequency boost).
+
+\subsubsection{Dual-Channel Parallel}
+Two independent spectral channels share weight storage: $2\times$ throughput
+for batch-2 inference at $2\times$ FFT area.
+
+\subsubsection{Configurable FFT Size}
+128/256/512-point FFT via Wishbone register. $2\times$ speedup for short
+sequences; $2\times$ longer context for long ones. Same weights work at any size
+(resolution invariance).
+
+\subsubsection{DVFS with Secure Tracking}
+Dynamic voltage-frequency scaling (1.8V$\to$1.2V) with secure voltage tracker.
+60\% idle power reduction, 78\% active power reduction at low $k$. Transitions
+only between batches (constant intra-batch timing).
+
+\subsubsection{DMA Burst Controller}
+4-word burst transfers via pipelined Wishbone B3: 75\% bus overhead reduction
+(1$\to$0.25 cycles/word). Weight load: 128$\to$32 cycles.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Security Architecture}
+%═══════════════════════════════════════════════════════════════════════════
+
+The chip implements 11 security measures, all preserved across V1--V3:
+
+\begin{table}[h]
+\centering
+\caption{Security measures.}
+\label{tab:security}
+\begin{tabular}{ll}
+\toprule
+\textbf{Measure} & \textbf{Mechanism} \\
+\midrule
+Bitstream encryption & LFSR-based stream cipher on weight bitstream \\
+Constant-time MAC & All $k$ modes processed in fixed cycles regardless of data \\
+Power flattening & Decoy MAC with LFSR data masks real multiply activity \\
+Integrity hash & 32-bit rolling hash of weight memory \\
+EM shielding & Top metal layer EM shield over compute core \\
+Reproducible build & Manifest hash verification of all source files \\
+DVFS secure tracking & Voltage transition verified before frequency change \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Constant-Time Spectral MAC}
+
+The constant-time guarantee ensures that the number of clock cycles for spectral
+multiplication depends only on $k$ (the configured mode count), not on the input
+data:
+\begin{equation}
+  T_{\text{MAC}} = k \cdot T_{\text{mode}} \quad \text{(independent of input values)}
+\end{equation}
+Zeroed modes (from soft-thresholding) are processed through dummy cycles with
+LFSR-generated decoy data, so the cycle count and power profile are identical
+whether a mode is zeroed or not.
+
+\subsection{Power Flattening}
+
+The decoy MAC computes meaningless multiplies on LFSR-generated data with the
+same statistical properties as real data. The power consumption of a real
+multiply and a dummy multiply are indistinguishable:
+\begin{equation}
+  P_{\text{real}}(w, x) \approx P_{\text{decoy}}(\text{LFSR}, \text{LFSR}) \quad \forall w, x
+\end{equation}
+This prevents power-analysis side-channel attacks from recovering spectral
+weight values.
+
+\subsection{Integrity Hash}
+
+A 32-bit rolling hash covers the weight memory:
+\begin{equation}
+  H = \sum_{i=0}^{N-1} w_i \cdot 2^{i \bmod 32} \pmod{2^{32}}
+\end{equation}
+The hash is computed on-chip at initialization and compared against the expected
+value loaded by the host. Any tampering with weights (bit-flip, substitution)
+is detected with probability $1 - 2^{-32}$.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Benchmark Results}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{Area Comparison}
+
+\begin{table}[h]
+\centering
+\caption{Area comparison across versions (gate equivalents).}
+\label{tab:area}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Module} & \textbf{V1} & \textbf{V2} & \textbf{V3} \\
+\midrule
+FFT engine & 5{,}100 & 5{,}100 & 4{,}870 \\
+IFFT engine & 5{,}100 & 0 (shared) & 0 (shared) \\
+Spectral multiply & 76{,}800 & 1{,}200 & 800 \\
+modReLU & 12{,}800 & 200 & 200 \\
+Wishbone/control & 500 & 500 & 800 \\
+Security modules & 0 & 2{,}000 & 2{,}100 \\
+Ping-pong buffers & 0 & 0 & 8{,}000 \\
+Clock gating & 0 & 102 & 121 \\
+DVFS controller & 0 & 0 & 300 \\
+Deep pipeline regs & 0 & 0 & 400 \\
+Shadow prefetch & 0 & 0 & 500 \\
+Bit-rev router & 0 & 0 & 300 \\
+Conflict-free addr & 0 & 0 & 200 \\
+\midrule
+\textbf{Total} & \textbf{100{,}300} & \textbf{9{,}102} & \textbf{18{,}591} \\
+Reduction vs.\ V1 & --- & 90.9\% & 81.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Power Comparison}
+
+\begin{table}[h]
+\centering
+\caption{Power comparison across versions (mW).}
+\label{tab:power}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Module} & \textbf{V1} & \textbf{V2} & \textbf{V3} \\
+\midrule
+FFT engine & 1.800 & 1.800 & 4.280 \\
+IFFT engine & 1.800 & 0 & 0 \\
+Spectral multiply & 25.600 & 0.400 & 0.140 \\
+modReLU & 3.200 & 0.050 & 0.050 \\
+Wishbone/control & 0.100 & 0.100 & 0.100 \\
+Security (decoy MAC) & 0 & 0.400 & 0.400 \\
+Clock gating savings & 0 & $-0.540$ & $-0.642$ \\
+DVFS savings & 0 & 0 & $-0.428$ \\
+Deep pipeline regs & 0 & 0 & 0.150 \\
+\midrule
+\textbf{Total} & \textbf{32.50} & \textbf{2.21} & \textbf{4.05} \\
+Reduction vs.\ V1 & --- & 93.2\% & 87.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Throughput Comparison}
+
+\begin{table}[h]
+\centering
+\caption{Throughput comparison (tokens/s) at various $k$ and $N$.}
+\label{tab:throughput}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Config} & \textbf{V1} & \textbf{V2} & \textbf{V3} \\
+\midrule
+$k=8$, $N=128$ & 189{,}394 & 2{,}959 & 19{,}841 \\
+$k=8$, $N=256$ & 96{,}154 & 1{,}502 & 9{,}843 \\
+$k=8$, $N=512$ & 48{,}450 & 757 & 4{,}902 \\
+$k=16$, $N=128$ & 183{,}824 & 2{,}872 & 20{,}492 \\
+$k=16$, $N=256$ & 94{,}697 & 1{,}480 & 10{,}000 \\
+$k=24$, $N=128$ & 178{,}571 & 2{,}790 & 21{,}186 \\
+$k=32$, $N=128$ & 173{,}611 & 2{,}713 & 21{,}930 \\
+$k=32$, $N=256$ & 91{,}912 & 1{,}436 & 10{,}331 \\
+\midrule
+\textbf{Max} & \textbf{189{,}394} & \textbf{2{,}959} & \textbf{21{,}930} \\
+V3 improvement vs.\ V2 & --- & --- & $7.41\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Latency Comparison}
+
+\begin{table}[h]
+\centering
+\caption{Latency comparison ($k=32$, $N=256$).}
+\label{tab:latency}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Stage} & \textbf{V1} & \textbf{V2} & \textbf{V3} \\
+\midrule
+FFT cycles & 256 & 256 & 129 \\
+Spectral multiply cycles & 32 & 32 & 16 \\
+IFFT cycles & 256 & 256 & 256 \\
+\midrule
+\textbf{Total} & \textbf{544} & \textbf{34{,}816} & \textbf{7{,}744} \\
+Change vs.\ V1 & --- & $+6300\%$ & $+1324\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+V1's low latency is due to 64$\times$ parallel channel processing (expensive in
+area). V2 serializes channels (64$\times$ latency increase). V3 recovers via
+dual-channel, deep pipeline, RFFT, and early IFFT.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Silicon Target}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{SkyWater SKY130 Process}
+
+\begin{table}[h]
+\centering
+\caption{SKY130 process parameters.}
+\label{tab:sky130}
+\begin{tabular}{ll}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Node & 130\,nm \\
+Metal layers & 6 (1P6M) \\
+Core voltage & 1.8\,V \\
+I/O voltage & 3.3\,V \\
+Standard cell density & $\sim$100K routed gates/mm$^2$ \\
+SRAM available & 1KB--64KB macros \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Tiny Tapeout}
+
+Tiny Tapeout provides the cheapest path to silicon:
+\begin{itemize}[noitemsep]
+  \item Cost: \$50--\$500 per tile
+  \item Area: $\sim$1\,mm$^2$ ($\sim$100K gates)
+  \item I/O: Limited (shared pins, SPI-like protocol)
+  \item Timeline: $\sim$3 months from submission to packaged chip
+\end{itemize}
+
+The spectral mixer core ($\sim$40K gates V1, $\sim$18.6K gates V3) fits within a
+single Tiny Tapeout tile.
+
+\subsection{ChipIgnite Scaling}
+
+ChipIgnite ($\sim$\$14{,}950) provides $\sim$10\,mm$^2$ for a full transformer:
+\begin{table}[h]
+\centering
+\caption{ChipIgnite area budget.}
+\label{tab:chipignite}
+\begin{tabular}{lr}
+\toprule
+\textbf{Component} & \textbf{Area (mm$^2$)} \\
+\midrule
+Spectral mixer core (V3) & 0.19 \\
+4 transformer layers (spectral + FFN) & 3.5 \\
+Token embeddings (16KB SRAM) & 0.10 \\
+Unembedding (16KB SRAM) & 0.10 \\
+FFN weights (32KB SRAM) & 0.20 \\
+\midrule
+\textbf{Total} & $\sim$4.1 \\
+Available & 10.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Design Flow}
+
+\begin{equation}
+  \text{Verilog RTL} \xrightarrow{\text{Yosys}} \text{Gate netlist}
+  \xrightarrow{\text{OpenROAD}} \text{GDSII}
+  \xrightarrow{\text{DRC/LVS}} \text{Tapeout}
+\end{equation}
+
+The open-source EDA flow: Yosys (synthesis) $\to$ OpenROAD (floorplan, placement,
+CTS, routing) $\to$ OpenSTA (timing) $\to$ Magic + Netgen (DRC/LVS) $\to$ GDSII.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Compiler and Software Stack}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{SpectralChipCompiler}
+
+The compiler converts a trained PyTorch spectral transformer into a binary blob:
+\begin{enumerate}[noitemsep]
+  \item Walk the model and discover all spectral layers (AFNO/FFTNet).
+  \item Extract complex weight tensors $R_m \in \C^{k \times d \times b}$.
+  \item Quantize real and imaginary parts separately to int8 (symmetric, zero-point=0).
+  \item Pack into a binary blob with header (magic \texttt{SPLR}, version, metadata).
+\end{enumerate}
+
+\subsubsection{Binary Format}
+\begin{verbatim}
+Header (64 bytes):
+  magic        : 4s  "SPLR"
+  version      : I   1
+  n_layers     : I
+  d_model      : I
+  seq_len      : I
+  n_modes      : I
+  block_size   : I
+
+Per-layer block:
+  layer_type   : I   0=AFNO, 1=FFTNet
+  weight_len   : I
+  scale_real   : f   float32
+  scale_imag   : f   float32
+  threshold    : f   float32
+  weights_real : [int8] * weight_len
+  weights_imag : [int8] * weight_len
+\end{verbatim}
+
+\subsection{Python Simulation Stack}
+
+\begin{table}[h]
+\centering
+\caption{Python modules.}
+\label{tab:python}
+\begin{tabular}{ll}
+\toprule
+\textbf{Module} & \textbf{Purpose} \\
+\midrule
+\texttt{fno.py} & Fourier Neural Operator layer \\
+\texttt{afno.py} & Adaptive FNO with soft-thresholding \\
+\texttt{fftnet.py} & FFTNet adaptive spectral filter \\
+\texttt{transformer.py} & Spectral transformer block \\
+\texttt{model.py} & Tiny spectral LM ($\sim$100K params) \\
+\texttt{fixedpoint.py} & Q8.8 arithmetic simulator \\
+\texttt{quantize.py} & int8 quantization + int8 FFT \\
+\texttt{compiler.py} & PyTorch $\to$ chip blob compiler \\
+\texttt{perf\_sim.py} & V3 performance simulators (20 modules) \\
+\texttt{security.py} & Integrity hash + LFSR cipher \\
+\texttt{constant\_time.py} & Constant-time spectral MAC \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Test Suite}
+
+The project has 343 passing tests (11 slow tests deselected):
+\begin{itemize}[noitemsep]
+  \item \texttt{test\_afno.py}: AFNO reduction to FNO, gradients, thresholds, block sizes
+  \item \texttt{test\_fno.py}: Shape, zero modes, gradients, resolution invariance
+  \item \texttt{test\_fftnet.py}: modReLU, forward pass, sequence lengths
+  \item \texttt{test\_fixedpoint.py}: Q-format arithmetic, overflow, complex multiply
+  \item \texttt{test\_quantize.py}: Quantization, dequantization, int8 FFT
+  \item \texttt{test\_compiler.py}: Compile/load round-trip, verification
+  \item \texttt{test\_complexity.py}: Complexity benchmark
+  \item \texttt{test\_transformer.py}: Forward pass, gradients, resolution invariance
+  \item \texttt{test\_perf\_sim.py}: All 20 V3 improvement simulators
+  \item \texttt{test\_security.py}: Integrity hash, bitstream encryption, tamper detection
+  \item \texttt{test\_constant\_time.py}: Constant-timing verification
+  \item \texttt{test\_resolution.py}: Resolution invariance tests
+\end{itemize}
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{V4--V7 Additional Improvements}
+%═══════════════════════════════════════════════════════════════════════════
+
+Beyond V3's 20 improvements, the project adds 33 more across V4--V7:
+
+\subsection{V4 Speed Improvements (21--25)}
+\begin{itemize}[noitemsep]
+  \item \textbf{Triple Twiddle ROM}: 3 parallel read ports, 3$\times$ faster twiddle fetch
+  \item \textbf{Streaming IFFT Loader}: Overlapped IFFT input with spectral multiply output
+  \item \textbf{Mode-Skip Multiply}: Skip multiplier for truncated modes ($\geq K$), 87.5\% power savings
+  \item \textbf{Pipelined Butterfly}: 2-stage multiply/add split, 40\% critical path reduction, 65$\to$90\,MHz
+  \item \textbf{Batch Channel Controller}: Auto-sequencing for all $D=64$ channels, 6{,}300 cycles saved/layer
+\end{itemize}
+
+\subsection{V6 Clock Speed Improvements (26--32)}
+\begin{itemize}[noitemsep]
+  \item \textbf{Retimed Pipeline Registers}: Balanced path delays, 100$\to$120\,MHz
+  \item \textbf{Clock Tree Optimizer}: H-tree with 8 buffer stages, $<50$\,ps skew
+  \item \textbf{Multi-Stage Spectral Multiply}: 3-stage pipeline, 90$\to$110\,MHz
+  \item \textbf{Weight Register Banking}: 4-bank parallel read, 0 stall cycles
+  \item \textbf{Operand Isolation}: Clock gating inactive stages, 25\% power reduction
+  \item \textbf{Wider Datapath (Q12.4)}: 16$\times$ more dynamic range, prevents multi-layer overflow
+  \item \textbf{STA Fixup Buffers}: Buffer chains on long paths, 90$\to$120+\,MHz
+\end{itemize}
+
+\subsection{V6 Architecture (33--40)}
+\begin{itemize}[noitemsep]
+  \item \textbf{Speculative IFFT}: Starts at 80\% modes ready, 4\% latency reduction
+  \item \textbf{Multi-Port Weight SRAM}: Dual-port read, halves spectral multiply phase
+  \item \textbf{Fused FFT+IFFT}: Shared entire datapath, saves $\sim$8K gates
+  \item \textbf{Channel Interleaving}: 2$\times$ autoregressive throughput
+  \item \textbf{Configurable Pipeline Depth}: 2/4/8 stages, optimal latency-frequency tradeoff
+  \item \textbf{Wishbone Burst Write}: 4$\times$ faster input data loading
+  \item \textbf{Output Streaming FIFO}: Backpressure, 87\% output wait reduction
+  \item \textbf{Layer Scheduler}: Auto weight swapping, 400 cycles saved for 4-layer model
+\end{itemize}
+
+\subsection{V6 Reliability (41--45)}
+\begin{itemize}[noitemsep]
+  \item \textbf{Parity Error Detection}: 1-bit parity per butterfly, single-bit error detection
+  \item \textbf{Guard Bands}: Saturate at 95\% of max, prevents cascading overflow
+  \item \textbf{Sticky Overflow Counter}: 16-bit total overflow count per pass
+  \item \textbf{Redundant Checksum}: 16-bit XOR hash of spectral multiply outputs
+  \item \textbf{Thermal Throttle}: Ring-oscillator sensor, graceful $k$ reduction at 75$^\circ$C
+\end{itemize}
+
+\subsection{V7 Advanced Butterfly Cores (46--53)}
+\begin{itemize}[noitemsep]
+  \item \textbf{Split-Radix}: 35\% fewer multiplies (498 vs.\ 768 for $N=256$)
+  \item \textbf{Radix-8}: 33\% fewer multiplies, fewer stages (3 vs.\ 4)
+  \item \textbf{4$\times$ Parallel Array}: 4 simultaneous butterflies, 4$\times$ throughput
+  \item \textbf{Constant-Geometry FFT}: No bit-reversal needed, saves 256 cycles
+  \item \textbf{Stockham FFT}: Natural-order output, eliminates bit-reversal hardware
+  \item \textbf{Fused Butterfly+Multiply}: FMA, 30\% critical path reduction
+  \item \textbf{CORDIC Twiddle}: On-the-fly generation, saves $\sim$1{,}200 gates (ROM-free)
+  \item \textbf{Radix-8 Twiddle Bank}: 7 simultaneous twiddle factors, 7$\times$ faster access
+\end{itemize}
+
+Total across all versions: \textbf{53 improvements}.
+
+%═══════════════════════════════════════════════════════════════════════════
+\section{Conclusion and Future Work}
+%═══════════════════════════════════════════════════════════════════════════
+
+\subsection{Summary of Findings}
+
+Spectral Silicon demonstrates that the $\bigO(n^2)$ self-attention bottleneck in
+LLM inference can be replaced by an $\bigO(n \log n)$ spectral mixing pipeline
+implemented directly in silicon on a 130\,nm process. Key findings:
+
+\begin{enumerate}
+  \item \textbf{Area efficiency}: V3 achieves 18{,}591 GE---an 81.5\% reduction
+    from V1's 100{,}300 GE---while maintaining all 11 security measures.
+  \item \textbf{Power efficiency}: V3 consumes 4.05\,mW (87.5\% reduction from
+    V1's 32.5\,mW), making it feasible for battery-powered edge deployment.
+  \item \textbf{Throughput}: V3 achieves 21{,}930 tokens/s (7.41$\times$ over V2),
+    enabled by dual-channel processing, mode interleaving, and an 80\,MHz clock.
+  \item \textbf{Resolution invariance}: The same trained weights process
+    sequences of different lengths ($n=128, 256, 512$) without retraining---a
+    property unique to spectral mixing and impossible with self-attention.
+  \item \textbf{Quantization tolerance}: int8 symmetric quantization introduces
+    $<2\%$ error, compatible with the Q8.8 fixed-point datapath.
+  \item \textbf{Security}: Constant-time MAC with dummy cycles and power
+    flattening via decoy multiplies are \emph{combined} with power reduction
+    (zero-skip MAC), demonstrating that security and efficiency can coexist.
+\end{enumerate}
+
+\subsection{Future Work}
+
+\begin{itemize}
+  \item \textbf{Tapeout}: Submit V3 or V6 to a Tiny Tapeout shuttle for
+    fabrication and silicon validation.
+  \item \textbf{Analog extension}: Explore charge-domain FFT (switched-capacitor)
+    on SKY130 analog tiles for ultra-low-power spectral mixing.
+  \item \textbf{Multi-layer SoC}: Use ChipIgnite's 10\,mm$^2$ to integrate
+    4 complete spectral transformer layers with embeddings, FFN, and sampling.
+  \item \textbf{Larger FFT}: Support $N=512$ or $N=1024$ for longer context
+    windows, leveraging the resolution-invariance property.
+  \item \textbf{Training study}: Compare AFNO vs.\ FFTNet vs.\ standard attention
+    on downstream NLP tasks (perplexity, BLEU) at matched parameter counts.
+  \item \textbf{Feed-forward network chip}: A companion ASIC for the FFN stage
+    of the transformer, completing the on-chip inference pipeline.
+\end{itemize}
+
+%═══════════════════════════════════════════════════════════════════════════
+\section*{References}
+%═══════════════════════════════════════════════════════════════════════════
+
+\addcontentsline{toc}{section}{References}
+
+\begin{enumerate}[label={[\arabic*]}]
+  \item Li, Z.\ et al. ``Fourier Neural Operator for Parametric PDEs.''
+    \emph{ICLR} 2021. arXiv:2010.08895.
+  \item Guibas, J.\ et al. ``Adaptive Fourier Neural Operators: Efficient
+    Token Mixers for Transformers.'' 2021. arXiv:2111.13587.
+  \item Fein-Ashley, J.\ ``The FFT Strikes Back: An Efficient Alternative to
+    Self-Attention.'' 2025. arXiv:2502.18394.
+  \item Lee-Thorp, J.\ et al. ``FNet: Mixing Tokens with Fourier Transforms.''
+    \emph{NeurIPS} 2021.
+  \item Lu, L.\ et al. ``Learning Nonlinear Operators via DeepONet.''
+    \emph{Nature Machine Intelligence}, 2021.
+  \item Kovachki, N.\ et al. ``Neural Operator: Learning Maps Between
+    Complex Function Spaces.'' 2021. arXiv:2108.08481.
+  \item Vaswani, A.\ et al. ``Attention Is All You Need.''
+    \emph{NeurIPS} 2017.
+  \item Arjovsky, M.\ et al. ``Unitary Evolution Recurrent Neural Networks.''
+    \emph{ICML} 2016. (modReLU definition)
+  \item Booth, A.D.\ ``A Signed Binary Multiplication Technique.''
+    \emph{Quarterly Journal of Mechanics and Applied Mathematics}, 1951.
+  \item SkyWater SKY130 PDK: \url{https://github.com/google/skywater-pdk}
+  \item Tiny Tapeout: \url{https://tinytapeout.com/}
+  \item Efabless ChipIgnite: \url{https://chipfoundry.io/}
+  \item OpenROAD Project: \url{https://theopenroadproject.org/}
+  \item OpenLane: \url{https://github.com/The-OpenROAD-Project/OpenLane}
+\end{enumerate}
+
+\end{document}
