@@ -45,14 +45,22 @@ module spectral_mixer_v2 #(
     input  wire                    clk,
     input  wire                    rst_n,
 
-    // Wishbone bus interface
+    // Wishbone B4 Pipelined bus interface
     input  wire                    wb_cyc_i,
     input  wire                    wb_stb_i,
     input  wire                    wb_we_i,
-    input  wire [5:2]              wb_adr_i,
+    input  wire [5:0]              wb_adr_i,      // full 6-bit address (B4)
     input  wire [31:0]             wb_dat_i,
     output wire [31:0]             wb_dat_o,
-    output wire                    wb_ack_o
+    output wire                    wb_ack_o,
+    output wire                    wb_stall_o,     // B4 stall signal
+    input  wire [1:0]              wb_bte_i,       // B4 burst type extension
+    input  wire [2:0]              wb_cti_i,       // B4 cycle type indicator
+
+    // Status outputs (for TT wrapper / external monitoring)
+    output wire                    busy,
+    output wire                    done_status,
+    output wire                    error
 );
 
     //----------------------------------------------------------------------
@@ -82,13 +90,19 @@ module spectral_mixer_v2 #(
     wire signed [15:0]          data_rd_re;
     wire signed [15:0]          data_rd_im;
 
-    reg  busy;
-    reg  done_status;
-    reg  error;
+    reg  busy_r;
+    reg  done_status_r;
+    reg  error_r;
 
-    wishbone_if #(
+    // Wire output ports to internal regs
+    assign busy         = busy_r;
+    assign done_status  = done_status_r;
+    assign error         = error_r;
+
+    wishbone_b4 #(
         .REG_COUNT(16),
-        .DATA_WIDTH(32)
+        .DATA_WIDTH(32),
+        .ADDR_WIDTH(6)
     ) u_wb (
         .clk(clk),
         .rst_n(rst_n),
@@ -97,8 +111,11 @@ module spectral_mixer_v2 #(
         .wb_we_i(wb_we_i),
         .wb_adr_i(wb_adr_i),
         .wb_dat_i(wb_dat_i),
+        .wb_bte_i(wb_bte_i),
+        .wb_cti_i(wb_cti_i),
         .wb_dat_o(wb_dat_o),
         .wb_ack_o(wb_ack_o),
+        .wb_stall_o(wb_stall_o),
         .start(start_pulse),
         .n_modes(n_modes_reg),
         .block_size(block_size_reg),
@@ -118,9 +135,9 @@ module spectral_mixer_v2 #(
         .data_wr_im(data_wr_im),
         .data_rd_re(data_rd_re),
         .data_rd_im(data_rd_im),
-        .mixer_busy(busy),
-        .mixer_done(done_status),
-        .mixer_error(error)
+        .mixer_busy(busy_r),
+        .mixer_done(done_status_r),
+        .mixer_error(error_r)
     );
 
     //----------------------------------------------------------------------
@@ -373,9 +390,9 @@ module spectral_mixer_v2 #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             m_state        <= M_IDLE;
-            busy           <= 1'b0;
-            done_status    <= 1'b0;
-            error          <= 1'b0;
+            busy_r           <= 1'b0;
+            done_status_r    <= 1'b0;
+            error_r          <= 1'b0;
             fft_start      <= 1'b0;
             fft_mode       <= 1'b0;
             fft_in_valid   <= 1'b0;
@@ -396,7 +413,7 @@ module spectral_mixer_v2 #(
             act_re_r       <= 0;
             act_im_r       <= 0;
         end else begin
-            done_status <= 1'b0;  // Default
+            done_status_r <= 1'b0;  // Default
 
             // Default control signals
             fft_start    <= 1'b0;
@@ -407,11 +424,11 @@ module spectral_mixer_v2 #(
 
             //--- Idle: wait for start command ---
             M_IDLE: begin
-                busy <= 1'b0;
+                busy_r <= 1'b0;
                 if (start_pulse) begin
-                    busy      <= 1'b1;
-                    done_status<= 1'b0;
-                    error     <= 1'b0;
+                    busy_r      <= 1'b1;
+                    done_status_r<= 1'b0;
+                    error_r     <= 1'b0;
                     m_state   <= M_LOAD_FFT;
                     sample_cnt<= 0;
                     fft_start <= 1'b1;
@@ -504,9 +521,9 @@ module spectral_mixer_v2 #(
 
             //--- Done state ---
             M_DONE: begin
-                busy       <= 1'b0;
-                done_status<= 1'b1;
-                error      <= 1'b0;
+                busy_r       <= 1'b0;
+                done_status_r<= 1'b1;
+                error_r      <= 1'b0;
                 m_state    <= M_IDLE;
             end
 

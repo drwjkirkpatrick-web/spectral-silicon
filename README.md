@@ -4,13 +4,14 @@
 ![Process](https://img.shields.io/badge/SkyWater-SKY130_130nm-green)
 ![Program](https://img.shields.io/badge/Tiny%20Tapeout-$50–$500-orange)
 ![Status](https://img.shields.io/badge/status-simulation_passing-brightgreen)
-![Tests](https://img.shields.io/badge/tests-354%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-343%20passed-brightgreen)
 ![Architecture](https://img.shields.io/badge/arch-~50K%20gates%20%7C%201mm%C2%B2-red)
 ![Complexity](https://img.shields.io/badge/complexity-O(n%20log%20n)-blueviolet)
 ![Clock](https://img.shields.io/badge/clock-120%20MHz%20(V6)-success)
 ![Language](https://img.shields.io/badge/RTL-Verilog%202005-informational)
 ![Framework](https://img.shields.io/badge/ML%20sim-PyTorch-ee7722)
 ![Improvements](https://img.shields.io/badge/improvements-53%20(V1–V7)-9cf)
+![Bus](https://img.shields.io/badge/bus-Wishbone%20B4%20Pipelined-9cf)
 ![Gateways](https://img.shields.io/badge/FFT→multiply→IFFT→activate-9cf)
 
 `asic` · `sky130` · `tiny-tapeout` · `llm` · `neural-operator` · `fft` · `verilog` · `hardware` · `chip-design` · `spectral-mixing`

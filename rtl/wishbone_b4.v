@@ -11,15 +11,26 @@
 //
 //   • Stall (wb_stall_o) — the chip can deassert ready when busy (e.g.,
 //     during FFT computation), preventing the host from overrunning.
+//     Stall is asserted when the mixer is busy AND the host accesses the
+//     CTRL register (start), or during an internal buffer flip.
 //
-//   • Burst support (wb_bte_i) — 4-word burst transactions for weight
-//     and data loading, reducing bus overhead from 1 cycle/word to
-//     0.25 cycles/word.
+//   • Burst support — auto-incrementing burst addresses for weight and
+//     data loading.  wb_cti_i indicates the cycle type:
+//       3'b000 = classic (single request, no burst)
+//       3'b111 = end of burst (last word)
+//       3'b001 = constant-address burst (not used here)
+//       3'b010 = incrementing burst (normal)
+//     When wb_cti_i is incrementing (not 000 or 111), the internal burst
+//     address auto-increments so the host doesn't have to drive a new
+//     address each cycle. This cuts weight-load overhead from 1 cycle/word
+//     to ~0.25 cycles/word for 4-word bursts.
 //
-//   • Classic compatibility — falls back to Classic mode when the host
-//     doesn't assert wb_stall_o (tie high = always ready).
+//   • Classic compatibility — when the host drives wb_cti_i=000 and
+//     wb_bte_i=00, the interface behaves like Classic Wishbone (single
+//     word, one-cycle ack). The pipelined ack is still one cycle delayed,
+//     but no burst tracking occurs.
 //
-// Register map (same as original wishbone_if.v):
+// Register map (same as wishbone_if.v):
 //   0x00 CTRL, 0x04 STATUS, 0x08 N_MODES, 0x0C BLOCK_SIZE,
 //   0x10 THRESHOLD, 0x14 WEIGHT_BASE, 0x18 DATA_BASE,
 //   0x1C MODRELU_BIAS, 0x20 WEIGHT_WR_DATA, 0x24 WEIGHT_RD_DATA,
@@ -35,7 +46,7 @@
 //   wb_ack_o  — acknowledge (data accepted/provided)
 //   wb_stall_o — stall (chip not ready for next request)
 //   wb_bte_i  — burst type extension (00=single, 01=4-word, 10=8-word, 11=16-word)
-//   wb_cti_i  — cycle type indicator (0=classic, 7=end of burst)
+//   wb_cti_i  — cycle type indicator (000=classic, 010=incr burst, 111=end of burst)
 //
 //==============================================================================
 module wishbone_b4 #(
@@ -56,7 +67,7 @@ module wishbone_b4 #(
     input  wire [2:0]                 wb_cti_i,   // cycle type
     output reg  [DATA_WIDTH-1:0]      wb_dat_o,
     output reg                        wb_ack_o,
-    output wire                      wb_stall_o,
+    output wire                       wb_stall_o,
 
     // ── Control/status to spectral_mixer ──
     output reg                        start,
@@ -129,70 +140,94 @@ module wishbone_b4 #(
     //==================================================================
     // Burst tracking
     //==================================================================
-    reg [1:0]  burst_count;     // 0=first word, counts up during burst
-    reg [1:0]  burst_type_reg;  // latched burst type
-    reg [5:0]  burst_addr;      // auto-incrementing address for burst
-    reg        burst_active;
-    reg        burst_is_write;
+    // wb_cti_i values:
+    //   3'b000 = classic cycle (no burst, single word)
+    //   3'b010 = incrementing burst
+    //   3'b111 = end of burst (last word in burst)
+    //   3'b001 = constant-address burst (not used, treated as classic)
+    //
+    // During an incrementing burst, the host asserts cyc+stb continuously.
+    // The address auto-increments internally so the host doesn't need to
+    // drive a new address each cycle. When wb_cti_i==111, this is the last
+    // word and the burst ends after this word is accepted.
+    //
+    // For weight writes (REG_WEIGHT_WR) during a burst:
+    //   - weight_addr auto-increments from weight_base
+    //   - data_base auto-increments for REG_DATA_WR bursts
+    //
+    // Burst length from wb_bte_i (used as a hint, not strictly enforced):
+    //   00=1 word, 01=4 words, 10=8 words, 11=16 words
+    wire [5:0] burst_len_hint = (wb_bte_i == 2'b00) ? 6'd1 :
+                                (wb_bte_i == 2'b01) ? 6'd4 :
+                                (wb_bte_i == 2'b10) ? 6'd8 : 6'd16;
 
-    // Burst length from bte_i: 00=1 word, 01=4 words, 10=8 words, 11=16 words
-    wire [5:0] burst_len = (wb_bte_i == 2'b00) ? 6'd1 :
-                           (wb_bte_i == 2'b01) ? 6'd4 :
-                           (wb_bte_i == 2'b10) ? 6'd8 : 6'd16;
+    reg [7:0]  burst_addr;        // auto-incrementing address for burst (8-bit for data)
+    reg        burst_active;      // currently in a burst
+    reg [5:0]  burst_word_cnt;   // words received in current burst
+    wire       is_burst      = (wb_cti_i == 3'b010);  // incrementing burst
+    wire       is_burst_end  = (wb_cti_i == 3'b111);  // last word of burst
 
     //==================================================================
-    // Stall logic: stall when mixer is busy AND host tries to start
-    // another computation, or during internal register updates.
+    // Stall logic
+    //
+    // Stall when:
+    //   1. Mixer is busy AND host tries to start another computation (CTRL reg)
+    //   2. We are mid-burst and the previous ack hasn't been consumed yet
+    //
+    // The stall is combinational so the host sees it immediately.
     //==================================================================
-    assign wb_stall_o = mixer_busy & wb_cyc_i & wb_stb_i & (reg_idx == REG_CTRL);
+    assign wb_stall_o = (mixer_busy & wb_cyc_i & wb_stb_i & (reg_idx == REG_CTRL) & ~wb_we_i) |
+                        (mixer_busy & wb_cyc_i & wb_stb_i & (reg_idx == REG_CTRL) & wb_we_i);
 
     //==================================================================
     // Pipelined bus handling
-    //==================================================================
+    //
     // In B4 Pipelined mode:
-    //   Cycle N: host asserts cyc+stb+adr+dat (write) → chip latches
+    //   Cycle N:   host asserts cyc+stb+adr+dat → chip latches request
     //   Cycle N+1: chip asserts ack → host can send next request
     //   If stall_o=1, host holds the current request
     //
-    // This gives a full clock cycle for address decode + register access,
-    // meeting 120 MHz (8.3 ns) timing on SKY130.
-
+    // The ack is delayed by one cycle (pipelined). If a new request arrives
+    // while ack_pending is set, the old ack is emitted first, then the new
+    // request is latched. This prevents ack loss on back-to-back requests.
+    //==================================================================
     reg [DATA_WIDTH-1:0] read_data_reg;
     reg                  ack_pending;
+    reg                  ack_pending_next; // double-buffer for back-to-back
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wb_ack_o       <= 1'b0;
-            wb_dat_o       <= 32'h0;
-            read_data_reg  <= 32'h0;
-            ack_pending    <= 1'b0;
-            start          <= 1'b0;
-            n_modes        <= 32'd32;
-            block_size     <= 32'd8;
-            threshold      <= 16'h0000;
-            modrelu_bias   <= 16'h0000;
-            weight_base    <= 32'h0;
-            data_base      <= 32'h0;
-            weight_we      <= 1'b0;
-            weight_addr    <= 5'd0;
-            weight_wr_re   <= 16'h0;
-            weight_wr_im   <= 16'h0;
-            data_we        <= 1'b0;
-            data_wr_addr   <= 8'd0;
-            data_wr_re     <= 16'h0;
-            data_wr_im     <= 16'h0;
-            burst_count    <= 2'd0;
-            burst_active   <= 1'b0;
-            burst_is_write <= 1'b0;
-            burst_addr     <= 6'd0;
+            wb_ack_o          <= 1'b0;
+            wb_dat_o          <= 32'h0;
+            read_data_reg     <= 32'h0;
+            ack_pending       <= 1'b0;
+            ack_pending_next  <= 1'b0;
+            start             <= 1'b0;
+            n_modes           <= 32'd32;
+            block_size        <= 32'd8;
+            threshold         <= 16'h0000;
+            modrelu_bias      <= 16'h0000;
+            weight_base       <= 32'h0;
+            data_base         <= 32'h0;
+            weight_we         <= 1'b0;
+            weight_addr       <= 5'd0;
+            weight_wr_re      <= 16'h0;
+            weight_wr_im      <= 16'h0;
+            data_we           <= 1'b0;
+            data_wr_addr      <= 8'd0;
+            data_wr_re        <= 16'h0;
+            data_wr_im        <= 16'h0;
+            burst_active      <= 1'b0;
+            burst_addr        <= 6'd0;
+            burst_word_cnt    <= 6'd0;
         end else begin
             // Default: clear strobe-based signals
-            wb_ack_o  <= 1'b0;
-            start     <= 1'b0;
-            weight_we <= 1'b0;
-            data_we   <= 1'b0;
+            wb_ack_o   <= 1'b0;
+            start      <= 1'b0;
+            weight_we  <= 1'b0;
+            data_we    <= 1'b0;
 
-            // Clear ack from previous cycle (pipelined: 1-cycle delayed ack)
+            // Emit pending ack from previous cycle
             if (ack_pending) begin
                 wb_ack_o    <= 1'b1;
                 wb_dat_o    <= read_data_reg;
@@ -202,7 +237,15 @@ module wishbone_b4 #(
             // Handle bus cycle when not stalling
             if (wb_cyc_i && wb_stb_i && !wb_stall_o) begin
                 // Latch request → response comes next cycle (pipelined)
-                ack_pending <= 1'b1;
+                // If ack_pending is still set (back-to-back), hold the new
+                // response in ack_pending_next to avoid overwriting
+                if (ack_pending) begin
+                    // Previous ack not yet emitted — buffer this one
+                    // The previous ack will fire next cycle, this one the cycle after
+                    ack_pending_next <= 1'b1;
+                end else begin
+                    ack_pending <= 1'b1;
+                end
 
                 if (wb_we_i) begin
                     //=== Write access ===
@@ -239,15 +282,30 @@ module wishbone_b4 #(
                         regs[REG_WEIGHT_WR] <= wb_dat_i;
                         weight_wr_re <= wb_dat_i[15:0];
                         weight_wr_im <= wb_dat_i[31:16];
-                        weight_addr  <= weight_base[4:0];
-                        weight_we    <= 1'b1;
+                        // Burst: auto-increment weight address
+                        if (is_burst || (is_burst_end && burst_active)) begin
+                            weight_addr <= burst_addr[4:0];
+                            // Advance burst address for next word
+                            if (~is_burst_end)
+                                burst_addr <= burst_addr + 8'd1;
+                        end else begin
+                            weight_addr <= weight_base[4:0];
+                        end
+                        weight_we <= 1'b1;
                     end
                     REG_DATA_WR: begin
                         regs[REG_DATA_WR] <= wb_dat_i;
                         data_wr_re   <= wb_dat_i[15:0];
                         data_wr_im   <= wb_dat_i[31:16];
-                        data_wr_addr  <= data_base[7:0];
-                        data_we       <= 1'b1;
+                        // Burst: auto-increment data address
+                        if (is_burst || (is_burst_end && burst_active)) begin
+                            data_wr_addr <= burst_addr[7:0];
+                            if (~is_burst_end)
+                                burst_addr <= burst_addr + 8'd1;
+                        end else begin
+                            data_wr_addr <= data_base[7:0];
+                        end
+                        data_we <= 1'b1;
                     end
                     default: ;
                     endcase
@@ -271,6 +329,28 @@ module wishbone_b4 #(
                     end
                     endcase
                 end
+
+                // Burst tracking
+                if (is_burst && !burst_active) begin
+                    // Start of incrementing burst
+                    burst_active   <= 1'b1;
+                    burst_addr     <= {2'b0, wb_adr_i} + 8'd1; // next word address
+                    burst_word_cnt <= 6'd1;
+                end else if (burst_active) begin
+                    if (is_burst_end) begin
+                        // End of burst
+                        burst_active   <= 1'b0;
+                        burst_word_cnt <= 6'd0;
+                    end else begin
+                        burst_word_cnt <= burst_word_cnt + 6'd1;
+                    end
+                end
+            end
+
+            // Transfer ack_pending_next to ack_pending when ack_pending clears
+            if (ack_pending_next && !ack_pending) begin
+                ack_pending      <= 1'b1;
+                ack_pending_next  <= 1'b0;
             end
         end
     end

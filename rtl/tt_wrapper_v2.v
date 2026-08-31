@@ -94,10 +94,13 @@ module tt_um_spectral_silicon_v2 (
     reg         wb_cyc;
     reg         wb_stb;
     reg         wb_we;
-    reg  [5:2]  wb_adr;
+    reg  [5:0]  wb_adr;
     reg  [31:0] wb_dat_i;
     wire [31:0] wb_dat_o;
     wire        wb_ack;
+    wire        wb_stall;
+    reg  [1:0]  wb_bte;
+    reg  [2:0]  wb_cti;
 
     //----------------------------------------------------------------------
     // Spectral mixer v2 instance
@@ -123,8 +126,17 @@ module tt_um_spectral_silicon_v2 (
         .wb_adr_i(wb_adr),
         .wb_dat_i(wb_dat_i),
         .wb_dat_o(wb_dat_o),
-        .wb_ack_o(wb_ack)
+        .wb_ack_o(wb_ack),
+        .wb_stall_o(wb_stall),
+        .wb_bte_i(wb_bte),
+        .wb_cti_i(wb_cti),
+        .busy(mixer_busy),
+        .done_status(mixer_done),
+        .error(mixer_error)
     );
+
+    // Internal status wires from mixer
+    wire mixer_busy, mixer_done, mixer_error;
 
     //----------------------------------------------------------------------
     // SPI-like protocol handler (identical to v1)
@@ -145,8 +157,10 @@ module tt_um_spectral_silicon_v2 (
             wb_cyc      <= 1'b0;
             wb_stb      <= 1'b0;
             wb_we       <= 1'b0;
-            wb_adr      <= 4'b0;
+            wb_adr      <= 6'b0;
             wb_dat_i    <= 32'b0;
+            wb_bte      <= 2'b00;  // single word (no burst)
+            wb_cti      <= 3'b000;  // classic cycle
         end else begin
             prev_sck <= spi_sck;
 
@@ -198,7 +212,7 @@ module tt_um_spectral_silicon_v2 (
                             wb_cyc   <= 1'b1;
                             wb_stb   <= 1'b1;
                             wb_we    <= 1'b0;
-                            wb_adr   <= addr_byte[5:2];
+                            wb_adr   <= {addr_byte[5:2], 2'b00};
                         end else begin
                             // Unknown command: return to idle
                             spi_state <= S_IDLE;
@@ -225,7 +239,7 @@ module tt_um_spectral_silicon_v2 (
                             wb_cyc    <= 1'b1;
                             wb_stb    <= 1'b1;
                             wb_we     <= 1'b1;
-                            wb_adr    <= addr_byte[5:2];
+                            wb_adr    <= {addr_byte[5:2], 2'b00};
                             wb_dat_i  <= {shift_reg[6:0], spi_mosi, data_rx[23:0]};
                             byte_cnt  <= 0;
                         end else begin
@@ -305,9 +319,9 @@ module tt_um_spectral_silicon_v2 (
 
     // uio_out: status and debug
     always @(*) begin
-        uio_out[7] = u_mixer.busy;
-        uio_out[6] = u_mixer.done_status;
-        uio_out[5] = u_mixer.error;
+        uio_out[7] = mixer_busy;
+        uio_out[6] = mixer_done;
+        uio_out[5] = mixer_error;
         uio_out[4:0] = 5'h0;               // Unused
     end
 

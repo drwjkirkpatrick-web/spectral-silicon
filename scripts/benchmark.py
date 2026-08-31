@@ -17,6 +17,14 @@ import time
 
 import numpy as np
 
+# Ensure the project root is on sys.path so `spectral_silicon` is importable
+# regardless of the caller's working directory or PYTHONPATH.
+import os
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 try:
     import torch
     HAS_TORCH = True

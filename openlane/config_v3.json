@@ -24,6 +24,7 @@
         "rtl/power_flattening.v",
         "rtl/em_shield.v",
         "rtl/wishbone_if.v",
+        "rtl/wishbone_b4.v",
         "rtl/spectral_mixer_v2.v",
         "rtl/spectral_mixer_v3.v",
         "rtl/tt_wrapper_v2.v",

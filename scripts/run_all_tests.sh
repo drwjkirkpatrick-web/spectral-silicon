@@ -164,7 +164,7 @@ else
         echo "    v1 RTL: no files found — SKIPPED"
     fi
 
-    # --- v2 modules (shared FFT + security) ---
+    # --- v2 modules (shared FFT + security + B4 bus) ---
     V2_RTL=(
         rtl/butterfly2.v
         rtl/butterfly4.v
@@ -179,6 +179,7 @@ else
         rtl/power_flattening.v
         rtl/em_shield.v
         rtl/wishbone_if.v
+        rtl/wishbone_b4.v
         rtl/spectral_mixer_v2.v
         rtl/tt_wrapper_v2.v
     )

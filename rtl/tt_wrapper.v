@@ -116,8 +116,14 @@ module tt_um_spectral_silicon (
         .wb_adr_i(wb_adr),
         .wb_dat_i(wb_dat_i),
         .wb_dat_o(wb_dat_o),
-        .wb_ack_o(wb_ack)
+        .wb_ack_o(wb_ack),
+        .busy(mixer_busy),
+        .done(mixer_done),
+        .error(mixer_error)
     );
+
+    // Internal status wires from mixer
+    wire mixer_busy, mixer_done, mixer_error;
 
     //----------------------------------------------------------------------
     // SPI-like protocol handler
@@ -299,9 +305,9 @@ module tt_um_spectral_silicon (
 
     // uio_out: status and debug
     always @(*) begin
-        uio_out[7] = u_mixer.busy;
-        uio_out[6] = u_mixer.done;
-        uio_out[5] = u_mixer.error;
+        uio_out[7] = mixer_busy;
+        uio_out[6] = mixer_done;
+        uio_out[5] = mixer_error;
         uio_out[4:0] = 5'h0;               // Unused
     end
 

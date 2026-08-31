@@ -44,7 +44,12 @@ module spectral_mixer #(
     input  wire [5:2]              wb_adr_i,
     input  wire [31:0]             wb_dat_i,
     output wire [31:0]             wb_dat_o,
-    output wire                    wb_ack_o
+    output wire                    wb_ack_o,
+
+    // Status outputs (for TT wrapper / external monitoring)
+    output wire                    busy,
+    output wire                    done,
+    output wire                    error
 );
 
     //----------------------------------------------------------------------
@@ -106,9 +111,9 @@ module spectral_mixer #(
         .data_wr_im(data_wr_im),
         .data_rd_re(data_rd_re),
         .data_rd_im(data_rd_im),
-        .mixer_busy(busy),
-        .mixer_done(done),
-        .mixer_error(error)
+        .mixer_busy(busy_r),
+        .mixer_done(done_r),
+        .mixer_error(error_r)
     );
 
     //----------------------------------------------------------------------
@@ -290,17 +295,22 @@ module spectral_mixer #(
     reg [2:0] m_state;
     reg [7:0] sample_cnt;    // Counter for loading/reading samples
 
-    // Status outputs to Wishbone
-    reg busy;
-    reg done;
-    reg error;
+    // Status outputs to Wishbone (declared as reg, driven by state machine)
+    reg busy_r;
+    reg done_r;
+    reg error_r;
+
+    // Wire the output ports to the internal regs
+    assign busy  = busy_r;
+    assign done  = done_r;
+    assign error = error_r;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             m_state        <= M_IDLE;
-            busy           <= 1'b0;
-            done           <= 1'b0;
-            error          <= 1'b0;
+            busy_r           <= 1'b0;
+            done_r           <= 1'b0;
+            error_r          <= 1'b0;
             fft_start      <= 1'b0;
             fft_in_valid   <= 1'b0;
             fft_in_re      <= 0;
@@ -308,17 +318,17 @@ module spectral_mixer #(
             ifft_start     <= 1'b0;
             sample_cnt     <= 0;
         end else begin
-            done <= 1'b0;  // Default
+            done_r <= 1'b0;  // Default
 
             case (m_state)
 
             //--- Idle: wait for start command ---
             M_IDLE: begin
-                busy <= 1'b0;
+                busy_r <= 1'b0;
                 if (start_pulse) begin
-                    busy     <= 1'b1;
-                    done     <= 1'b0;
-                    error    <= 1'b0;
+                    busy_r     <= 1'b1;
+                    done_r     <= 1'b0;
+                    error_r    <= 1'b0;
                     m_state  <= M_LOAD_FFT;
                     sample_cnt <= 0;
                     fft_start <= 1'b1;
@@ -379,9 +389,9 @@ module spectral_mixer #(
 
             //--- Done state ---
             M_DONE: begin
-                busy  <= 1'b0;
-                done  <= 1'b1;
-                error <= 1'b0;
+                busy_r  <= 1'b0;
+                done_r  <= 1'b1;
+                error_r <= 1'b0;
                 m_state <= M_IDLE;
             end
 

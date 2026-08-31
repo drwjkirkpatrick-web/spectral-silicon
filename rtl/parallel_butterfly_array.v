@@ -1,5 +1,4 @@
 `default_nettype none
-`include "rtl/butterfly4.v"
 //==============================================================================
 // parallel_butterfly_array.v — 4× Parallel Radix-4 Butterfly Array
 //==============================================================================
